@@ -1,0 +1,7 @@
+drafts
+evidence
+bouder*.json
+tests
+
+# Logs
+**/*.log
