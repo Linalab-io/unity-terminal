@@ -66,8 +66,7 @@ namespace Linalab.Terminal.Editor
             _lastAppliedFontSize = -1;
             _lastAppliedEffectiveFontFamily = null;
 
-            string cwd = TerminalSettings.GetWorkspaceDirectory();
-            _shellProcess.Start(cwd);
+            StartShell(TerminalSettings.AutoAttachTmux);
             EditorApplication.update += OnEditorUpdate;
             _initialized = true;
         }
@@ -191,6 +190,11 @@ namespace Linalab.Terminal.Editor
             if (GUILayout.Button("Restart", EditorStyles.toolbarButton, GUILayout.Width(60f)))
             {
                 RestartShell();
+            }
+
+            if (GUILayout.Button("Attach tmux", EditorStyles.toolbarButton, GUILayout.Width(84f)))
+            {
+                RestartShell(true);
             }
 
             if (GUILayout.Button("Settings", EditorStyles.toolbarButton, GUILayout.Width(64f)))
@@ -329,6 +333,11 @@ namespace Linalab.Terminal.Editor
 
         void RestartShell()
         {
+            RestartShell(TerminalSettings.AutoAttachTmux);
+        }
+
+        void RestartShell(bool attachToTmux)
+        {
             _shellProcess?.Kill();
             _shellProcess?.Dispose();
             _buffer?.Reset();
@@ -336,8 +345,13 @@ namespace Linalab.Terminal.Editor
             _shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
             _parser = new AnsiParser(_buffer);
             _parser.ResponseCallback = response => _shellProcess?.Write(response);
-            string cwd = TerminalSettings.GetWorkspaceDirectory();
-            _shellProcess.Start(cwd);
+            StartShell(attachToTmux);
+        }
+
+        void StartShell(bool attachToTmux)
+        {
+            string projectRoot = TerminalSettings.GetProjectRootDirectory();
+            _shellProcess.Start(projectRoot, attachToTmux);
         }
 
         void ClearTerminal()

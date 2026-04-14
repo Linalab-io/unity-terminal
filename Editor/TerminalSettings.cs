@@ -23,7 +23,6 @@ namespace Linalab.Terminal.Editor
         const string ScrollbackLimitKey = Prefix + "ScrollbackLimit";
         const string ShellProfileKey = Prefix + "ShellProfile";
         const string ShellPathOverrideKey = Prefix + "ShellPathOverride";
-        const string DefaultCwdKey = Prefix + "DefaultCwd";
         const string CursorBlinkRateKey = Prefix + "CursorBlinkRate";
         const string AutoAttachTmuxKey = Prefix + "AutoAttachTmux";
 
@@ -72,12 +71,6 @@ namespace Linalab.Terminal.Editor
             set => EditorPrefs.SetString(ShellPathOverrideKey, value ?? string.Empty);
         }
 
-        public static string DefaultCwd
-        {
-            get => EditorPrefs.GetString(DefaultCwdKey, string.Empty);
-            set => EditorPrefs.SetString(DefaultCwdKey, value ?? string.Empty);
-        }
-
         public static float CursorBlinkRate
         {
             get => EditorPrefs.GetFloat(CursorBlinkRateKey, 0.53f);
@@ -101,11 +94,9 @@ namespace Linalab.Terminal.Editor
             };
         }
 
-        public static string GetWorkspaceDirectory()
+        public static string GetProjectRootDirectory()
         {
-            return string.IsNullOrEmpty(DefaultCwd)
-                ? Path.GetDirectoryName(Application.dataPath)
-                : DefaultCwd;
+            return Path.GetDirectoryName(Application.dataPath);
         }
 
         public static string GetTmuxSessionName(string workspaceDirectory)

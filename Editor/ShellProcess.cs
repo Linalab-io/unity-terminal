@@ -12,7 +12,7 @@ namespace Linalab.Terminal.Editor
     {
         bool IsRunning { get; }
         int ProcessId { get; }
-        void Start(string workingDirectory = null);
+        void Start(string workingDirectory = null, bool attachToTmux = false);
         void Write(string input);
         void WriteByte(byte value);
         void Kill();
@@ -103,7 +103,7 @@ namespace Linalab.Terminal.Editor
             return "/bin/bash";
         }
 
-        public void Start(string workingDirectory = null)
+        public void Start(string workingDirectory = null, bool attachToTmux = false)
         {
             ThrowIfDisposed();
 
@@ -121,7 +121,7 @@ namespace Linalab.Terminal.Editor
 
                 DisposeProcess();
                 var shellPath = ResolveStartShellPath(_shellPath);
-                var startInfo = CreateStartInfo(shellPath, workingDirectory);
+                var startInfo = CreateStartInfo(shellPath, workingDirectory, attachToTmux);
 
                 _process = new Process
                 {
@@ -348,12 +348,12 @@ namespace Linalab.Terminal.Editor
             return "/bin/bash";
         }
 
-        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory)
+        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory, bool attachToTmux)
         {
             var startInfo = new ProcessStartInfo
             {
                 FileName = shellPath,
-                Arguments = GetShellArguments(shellPath, workingDirectory),
+                Arguments = GetShellArguments(shellPath, workingDirectory, attachToTmux),
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -378,23 +378,23 @@ namespace Linalab.Terminal.Editor
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists("/usr/bin/script"))
             {
                 startInfo.FileName = "/usr/bin/script";
-                startInfo.Arguments = CreatePseudoTerminalArguments(shellPath, workingDirectory);
+                startInfo.Arguments = CreatePseudoTerminalArguments(shellPath, workingDirectory, attachToTmux);
             }
 
             return startInfo;
         }
 
-        static string CreatePseudoTerminalArguments(string shellPath, string workingDirectory)
+        static string CreatePseudoTerminalArguments(string shellPath, string workingDirectory, bool attachToTmux)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                return $"-q /dev/null {QuoteArgument(shellPath)} {GetShellArguments(shellPath, workingDirectory)}".Trim();
+                return $"-q /dev/null {QuoteArgument(shellPath)} {GetShellArguments(shellPath, workingDirectory, attachToTmux)}".Trim();
             }
 
-            return $"-q -c {QuoteArgument($"{shellPath} {GetShellArguments(shellPath, workingDirectory)}".Trim())} /dev/null";
+            return $"-q -c {QuoteArgument($"{shellPath} {GetShellArguments(shellPath, workingDirectory, attachToTmux)}".Trim())} /dev/null";
         }
 
-        static string GetShellArguments(string shellPath, string workingDirectory)
+        static string GetShellArguments(string shellPath, string workingDirectory, bool attachToTmux)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
@@ -407,7 +407,7 @@ namespace Linalab.Terminal.Editor
                 return "-NoLogo";
             }
 
-            string tmuxStartupCommand = BuildTmuxStartupCommand(shellPath, workingDirectory);
+            string tmuxStartupCommand = BuildTmuxStartupCommand(shellPath, workingDirectory, attachToTmux);
             if (!string.IsNullOrEmpty(tmuxStartupCommand))
             {
                 return $"-i -c {QuoteArgument(tmuxStartupCommand)}";
@@ -456,15 +456,21 @@ namespace Linalab.Terminal.Editor
             return false;
         }
 
-        static string BuildTmuxStartupCommand(string shellPath, string workingDirectory)
+        static string BuildTmuxStartupCommand(string shellPath, string workingDirectory, bool attachToTmux)
         {
-            if (!TerminalSettings.AutoAttachTmux)
+            if (!attachToTmux)
             {
                 return null;
             }
 
             string sessionName = TerminalSettings.GetTmuxSessionName(workingDirectory);
-            return $"if command -v tmux >/dev/null 2>&1; then exec env TMUX= tmux new-session -A -s {QuoteForShell(sessionName)}; else exec {QuoteForShell(shellPath)} -i; fi";
+            string tmuxCommand = $"env TMUX= tmux new-session -A -s {QuoteForShell(sessionName)}";
+            if (!string.IsNullOrWhiteSpace(workingDirectory))
+            {
+                tmuxCommand += $" -c {QuoteForShell(workingDirectory)}";
+            }
+
+            return $"if command -v tmux >/dev/null 2>&1; then {tmuxCommand}; fi; exec {QuoteForShell(shellPath)} -i";
         }
 
         static string QuoteForShell(string value)

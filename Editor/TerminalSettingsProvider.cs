@@ -26,6 +26,8 @@ namespace Linalab.Terminal.Editor
 
         static void DrawGui()
         {
+            string projectRoot = TerminalSettings.GetProjectRootDirectory();
+
             EditorGUILayout.LabelField("Shell", EditorStyles.boldLabel);
             TerminalSettings.ShellProfile = (TerminalShellProfile)EditorGUILayout.EnumPopup("Shell Profile", TerminalSettings.ShellProfile);
 
@@ -38,9 +40,9 @@ namespace Linalab.Terminal.Editor
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Workspace", EditorStyles.boldLabel);
-            TerminalSettings.DefaultCwd = EditorGUILayout.TextField("Default Working Directory", TerminalSettings.DefaultCwd);
             TerminalSettings.AutoAttachTmux = EditorGUILayout.Toggle("Auto Attach tmux", TerminalSettings.AutoAttachTmux);
-            EditorGUILayout.HelpBox($"tmux session name: {TerminalSettings.GetTmuxSessionName(TerminalSettings.GetWorkspaceDirectory())}", MessageType.None);
+            EditorGUILayout.HelpBox($"Project root: {projectRoot}", MessageType.None);
+            EditorGUILayout.HelpBox($"tmux session name: {TerminalSettings.GetTmuxSessionName(projectRoot)}", MessageType.None);
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Display", EditorStyles.boldLabel);
