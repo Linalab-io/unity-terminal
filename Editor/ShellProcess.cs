@@ -701,7 +701,6 @@ namespace Linalab.Terminal.Editor
             _readerCancellation = new CancellationTokenSource();
             _outputReaderThread = CreateReaderThread(_process.StandardOutput.BaseStream, _outputQueue, _readerCancellation.Token, "UnityTerminal-stdout");
             _errorReaderThread = CreateReaderThread(_process.StandardError.BaseStream, _errorQueue, _readerCancellation.Token, "UnityTerminal-stderr");
-            UnityEngine.Debug.Log("[Terminal/ShellProcess] Starting reader threads");
             _outputReaderThread.Start();
             _errorReaderThread.Start();
         }
@@ -738,14 +737,12 @@ namespace Linalab.Terminal.Editor
                     int read = stream.Read(byteBuffer, 0, byteBuffer.Length);
                     if (read <= 0)
                     {
-                        UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop reached EOF");
                         break;
                     }
 
                     int charCount = decoder.GetChars(byteBuffer, 0, read, charBuffer, 0, flush: false);
                     if (charCount > 0)
                     {
-                        UnityEngine.Debug.Log($"[Terminal/ShellProcess] ReadLoop received {charCount} chars");
                         queue.Enqueue(new string(charBuffer, 0, charCount));
                     }
                 }
@@ -758,15 +755,12 @@ namespace Linalab.Terminal.Editor
             }
             catch (IOException)
             {
-                UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop IOException");
             }
             catch (ObjectDisposedException)
             {
-                UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop ObjectDisposedException");
             }
             catch (InvalidOperationException)
             {
-                UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop InvalidOperationException");
             }
         }
 

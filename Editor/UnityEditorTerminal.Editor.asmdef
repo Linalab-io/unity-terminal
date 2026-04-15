@@ -1,7 +1,9 @@
 {
   "name": "Linalab.Terminal.Editor",
   "rootNamespace": "Linalab.Terminal.Editor",
-  "references": [],
+  "references": [
+    "Linalab.Log"
+  ],
   "includePlatforms": [
     "Editor"
   ],

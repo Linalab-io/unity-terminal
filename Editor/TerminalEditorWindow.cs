@@ -1,6 +1,7 @@
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
+using Linalab;
 
 namespace Linalab.Terminal.Editor
 {
@@ -21,6 +22,8 @@ namespace Linalab.Terminal.Editor
         bool _terminalFocused;
         bool _editorUpdateSubscribed;
         bool _shellPumpScheduled;
+        bool _surfaceAttachPending;
+        bool _loggedBufferPreview;
         double _lastPollTime;
         double _notificationHideAt;
         int _lastAppliedFontSize;
@@ -98,31 +101,43 @@ namespace Linalab.Terminal.Editor
         // the buffer was ready (e.g. after a domain reload race condition).
         void EnsureSurface()
         {
-            if (_terminalSurface != null || _buffer == null)
+            if (_terminalSurface != null || _buffer == null || _surfaceAttachPending)
             {
                 return;
             }
 
-            _terminalSurface = new TerminalSurfaceElement(_buffer);
-            _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
-            _terminalSurface.OnInputRequested += HandleKeyInput;
-            _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
-            _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
-
-            var surfaceContainer = new VisualElement
+            _surfaceAttachPending = true;
+            rootVisualElement.schedule.Execute(() =>
             {
-                style =
+                _surfaceAttachPending = false;
+                if (_terminalSurface != null || _buffer == null || rootVisualElement == null)
                 {
-                    flexGrow = 1,
-                    paddingLeft = 8f,
-                    paddingRight = 8f,
-                    paddingTop = 6f,
-                    paddingBottom = 6f
+                    return;
                 }
-            };
-            surfaceContainer.Add(_terminalSurface);
-            rootVisualElement.Add(surfaceContainer);
-            _needsResize = true;
+
+                _terminalSurface = new TerminalSurfaceElement(_buffer);
+                _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
+                _terminalSurface.OnInputRequested += HandleKeyInput;
+                _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
+                _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
+
+                var surfaceContainer = new VisualElement
+                {
+                    style =
+                    {
+                        flexGrow = 1,
+                        paddingLeft = 8f,
+                        paddingRight = 8f,
+                        paddingTop = 6f,
+                        paddingBottom = 6f
+                    }
+                };
+
+                surfaceContainer.Add(_terminalSurface);
+                rootVisualElement.Add(surfaceContainer);
+                _needsResize = true;
+                Repaint();
+            }).StartingIn(0);
         }
 
         void OnEnable()
@@ -244,7 +259,14 @@ namespace Linalab.Terminal.Editor
 
             if (hadOutput)
             {
+                if (!_loggedBufferPreview && _buffer != null)
+                {
+                    _loggedBufferPreview = true;
+                    D.Log($"[Terminal] Buffer preview after output: {BuildBufferPreview()}");
+                }
+
                 _terminalSurface?.ScrollToBottom();
+                _terminalSurface?.MarkDirtyRepaint();
             }
 
             if (_needsResize && _terminalSurface != null)
@@ -492,6 +514,7 @@ namespace Linalab.Terminal.Editor
         void StartShell(bool attachToTmux)
         {
             SetAttachToTmuxForSession(attachToTmux);
+            _loggedBufferPreview = false;
             if (_shellProcess == null)
             {
                 return;
@@ -535,6 +558,35 @@ namespace Linalab.Terminal.Editor
             _terminalSurface?.ClearSelection();
         }
 
+        string BuildBufferPreview()
+        {
+            if (_buffer == null)
+            {
+                return "buffer=null";
+            }
+
+            int rows = Mathf.Min(3, _buffer.Rows);
+            int cols = Mathf.Min(40, _buffer.Cols);
+            var parts = new System.Text.StringBuilder();
+
+            for (int row = 0; row < rows; row++)
+            {
+                if (row > 0)
+                {
+                    parts.Append(" | ");
+                }
+
+                for (int col = 0; col < cols; col++)
+                {
+                    var cell = _buffer.GetCell(row, col);
+                    char ch = cell.Codepoint == '\0' ? '·' : cell.Codepoint;
+                    parts.Append(ch == ' ' ? '␠' : ch);
+                }
+            }
+
+            return parts.ToString();
+        }
+
         void IncreaseFontSize()
         {
             TerminalSettings.FontSize += 1;
@@ -572,6 +624,7 @@ namespace Linalab.Terminal.Editor
             _buffer = null;
             _terminalSurface = null;
             _commandRouter = null;
+            _surfaceAttachPending = false;
         }
     }
 }

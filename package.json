@@ -12,6 +12,9 @@
     "type": "git",
     "url": "https://github.com/islee23520/unity-editor-terminal.git"
   },
+  "dependencies": {
+    "com.linalab.unity-log": "0.0.1"
+  },
   "documentationUrl": "https://github.com/islee23520/unity-editor-terminal",
   "changelogUrl": "https://github.com/islee23520/unity-editor-terminal/releases",
   "licensesUrl": "https://github.com/islee23520/unity-editor-terminal/blob/main/LICENSE",
