@@ -117,11 +117,7 @@ namespace Linalab.Terminal.Editor
 
     public static class AnsiPalette
     {
-        static Color[] _palette;
-
-        public static Color[] Colors => _palette ??= BuildPalette();
-
-        static Color[] BuildPalette()
+        public static Color[] BuildDefaultPalette()
         {
             var palette = new Color[256];
             palette[0] = FromHex(0x000000);
@@ -171,8 +167,8 @@ namespace Linalab.Terminal.Editor
                 1f);
         }
 
-        public static readonly Color DefaultForeground = FromHex(0xCCCCCC);
-        public static readonly Color DefaultBackground = FromHex(0x1E1E2E);
-        public static readonly Color CursorColor = FromHex(0xF8F8F2);
+        public static readonly Color FallbackDefaultForeground = FromHex(0xCCCCCC);
+        public static readonly Color FallbackDefaultBackground = FromHex(0x1E1E2E);
+        public static readonly Color FallbackCursorColor = FromHex(0xF8F8F2);
     }
 }

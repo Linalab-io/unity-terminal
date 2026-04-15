@@ -11,7 +11,9 @@ namespace Linalab.Terminal.Editor
             Ground,
             Escape,
             EscapeIntermediate,
-            Csi
+            Csi,
+            IgnoreString,
+            IgnoreStringEscape
         }
 
         readonly ITerminalBuffer _buffer;
@@ -86,6 +88,14 @@ namespace Linalab.Terminal.Editor
                     HandleCsi(character);
                     break;
 
+                case ParserState.IgnoreString:
+                    HandleIgnoredString(character);
+                    break;
+
+                case ParserState.IgnoreStringEscape:
+                    _state = character == '\\' ? ParserState.Ground : ParserState.IgnoreString;
+                    break;
+
                 case ParserState.EscapeIntermediate:
                     _state = ParserState.Ground;
                     break;
@@ -94,6 +104,21 @@ namespace Linalab.Terminal.Editor
 
         bool HandleControlCharacter(char character)
         {
+            if (_state == ParserState.IgnoreString)
+            {
+                if (character == '\x07')
+                {
+                    _state = ParserState.Ground;
+                    return true;
+                }
+
+                if (character == '\x1B')
+                {
+                    _state = ParserState.IgnoreStringEscape;
+                    return true;
+                }
+            }
+
             switch (character)
             {
                 case '\x07':
@@ -139,6 +164,12 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
+            if (character is ']' or 'P' or '_' or '^' or 'X')
+            {
+                _state = ParserState.IgnoreString;
+                return;
+            }
+
             if (character is '(' or ')' or '*' or '+' or '-' or '.' or '/')
             {
                 _state = ParserState.EscapeIntermediate;
@@ -163,6 +194,20 @@ namespace Linalab.Terminal.Editor
             }
 
             _state = ParserState.Ground;
+        }
+
+        void HandleIgnoredString(char character)
+        {
+            if (character == '\x07')
+            {
+                _state = ParserState.Ground;
+                return;
+            }
+
+            if (character == '\x1B')
+            {
+                _state = ParserState.IgnoreStringEscape;
+            }
         }
 
         void HandleCsi(char character)

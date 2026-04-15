@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -12,7 +13,7 @@ namespace Linalab.Terminal.Editor
     {
         bool IsRunning { get; }
         int ProcessId { get; }
-        void Start(string workingDirectory = null, bool attachToTmux = false);
+        void Start(string workingDirectory = null, bool attachToTmux = false, int cols = 80, int rows = 24);
         void Write(string input);
         void WriteByte(byte value);
         void Kill();
@@ -32,6 +33,7 @@ namespace Linalab.Terminal.Editor
         Thread _errorReaderThread;
         bool _disposed;
         int _exitEventRaised;
+        bool _attachToTmux;
 
         public ShellProcess(string shellPathOverride = null)
         {
@@ -72,6 +74,8 @@ namespace Linalab.Terminal.Editor
             }
         }
 
+        public bool CanPreserveSessionOnReload => _attachToTmux;
+
         public static string DetectShell()
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -103,7 +107,7 @@ namespace Linalab.Terminal.Editor
             return "/bin/bash";
         }
 
-        public void Start(string workingDirectory = null, bool attachToTmux = false)
+        public void Start(string workingDirectory = null, bool attachToTmux = false, int cols = 80, int rows = 24)
         {
             ThrowIfDisposed();
 
@@ -120,8 +124,9 @@ namespace Linalab.Terminal.Editor
                 }
 
                 DisposeProcess();
+                _attachToTmux = attachToTmux;
                 var shellPath = ResolveStartShellPath(_shellPath);
-                var startInfo = CreateStartInfo(shellPath, workingDirectory, attachToTmux);
+                var startInfo = CreateStartInfo(shellPath, workingDirectory, attachToTmux, cols, rows);
 
                 _process = new Process
                 {
@@ -135,6 +140,7 @@ namespace Linalab.Terminal.Editor
                 _process.Exited += OnProcessExited;
                 _process.Start();
                 StartReaders();
+                TryResize(cols, rows);
             }
         }
 
@@ -216,6 +222,81 @@ namespace Linalab.Terminal.Editor
 
         public void Resize(int cols, int rows)
         {
+            TryResize(cols, rows);
+        }
+
+        public bool TryResize(int cols, int rows)
+        {
+            if (_disposed || cols <= 0 || rows <= 0)
+            {
+                return false;
+            }
+
+            int processId;
+            lock (_syncRoot)
+            {
+                if (!IsProcessRunning(_process))
+                {
+                    return false;
+                }
+
+                try
+                {
+                    processId = _process.Id;
+                }
+                catch (InvalidOperationException)
+                {
+                    return false;
+                }
+            }
+
+            if (!TryGetControllingTerminalPath(processId, out var terminalPath))
+            {
+                return false;
+            }
+
+            ApplyTerminalSize(terminalPath, cols, rows);
+            int processGroupId = GetForegroundProcessGroupId(processId);
+            SignalWindowSizeChanged(processId, processGroupId);
+            return true;
+        }
+
+        public void DetachPreservingSession()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            Process process;
+            lock (_syncRoot)
+            {
+                process = _process;
+            }
+
+            if (_attachToTmux)
+            {
+                Write("tmux setw -w window-size latest >/dev/null 2>&1 || true\n");
+                Write("tmux detach-client\n");
+            }
+
+            if (IsProcessRunning(process))
+            {
+                try
+                {
+                    Thread.Sleep(100);
+                }
+                catch (ThreadInterruptedException)
+                {
+                }
+
+                TerminateProcess(process);
+            }
+
+            lock (_syncRoot)
+            {
+                DisposeProcess();
+            }
         }
 
         public void DrainOutput(Action<string> handler)
@@ -348,7 +429,7 @@ namespace Linalab.Terminal.Editor
             return "/bin/bash";
         }
 
-        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory, bool attachToTmux)
+        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory, bool attachToTmux, int cols, int rows)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -372,8 +453,8 @@ namespace Linalab.Terminal.Editor
             startInfo.Environment["TERM"] = "xterm-256color";
             startInfo.Environment["LANG"] = "en_US.UTF-8";
             startInfo.Environment["PYTHONUNBUFFERED"] = "1";
-            startInfo.Environment["COLUMNS"] = "80";
-            startInfo.Environment["LINES"] = "24";
+            startInfo.Environment["COLUMNS"] = Math.Max(1, cols).ToString(CultureInfo.InvariantCulture);
+            startInfo.Environment["LINES"] = Math.Max(1, rows).ToString(CultureInfo.InvariantCulture);
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists("/usr/bin/script"))
             {
@@ -382,6 +463,142 @@ namespace Linalab.Terminal.Editor
             }
 
             return startInfo;
+        }
+
+        static bool TryGetControllingTerminalPath(int processId, out string terminalPath)
+        {
+            terminalPath = null;
+
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "/bin/ps",
+                        Arguments = $"-o tty= -p {processId}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                string output = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit(250);
+                if (string.IsNullOrWhiteSpace(output) || output == "?" || output == "??")
+                {
+                    return false;
+                }
+
+                terminalPath = output.StartsWith("/dev/", StringComparison.Ordinal)
+                    ? output
+                    : $"/dev/{output}";
+
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        static int GetForegroundProcessGroupId(int processId)
+        {
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "/bin/ps",
+                        Arguments = $"-o tpgid= -p {processId}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                string output = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit(250);
+                return int.TryParse(output, out int processGroupId) && processGroupId > 0
+                    ? processGroupId
+                    : -1;
+            }
+            catch (InvalidOperationException)
+            {
+                return -1;
+            }
+            catch (IOException)
+            {
+                return -1;
+            }
+        }
+
+        static void ApplyTerminalSize(string terminalPath, int cols, int rows)
+        {
+            try
+            {
+                string terminalFlag = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "-f" : "-F";
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "/bin/stty",
+                        Arguments = $"{terminalFlag} {terminalPath} rows {rows} cols {cols}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                process.WaitForExit(250);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        static void SignalWindowSizeChanged(int processId, int processGroupId)
+        {
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "/bin/kill",
+                        Arguments = processGroupId > 0
+                            ? $"-WINCH -- -{processGroupId}"
+                            : $"-WINCH {processId}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                process.WaitForExit(250);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (IOException)
+            {
+            }
         }
 
         static string CreatePseudoTerminalArguments(string shellPath, string workingDirectory, bool attachToTmux)
@@ -470,7 +687,7 @@ namespace Linalab.Terminal.Editor
                 tmuxCommand += $" -c {QuoteForShell(workingDirectory)}";
             }
 
-            return $"if command -v tmux >/dev/null 2>&1; then {tmuxCommand}; fi; exec {QuoteForShell(shellPath)} -i";
+            return $"if command -v tmux >/dev/null 2>&1; then exec {tmuxCommand}; else exec {QuoteForShell(shellPath)} -i; fi";
         }
 
         static string QuoteForShell(string value)
@@ -482,8 +699,9 @@ namespace Linalab.Terminal.Editor
         {
             StopReaders();
             _readerCancellation = new CancellationTokenSource();
-            _outputReaderThread = CreateReaderThread(_process.StandardOutput, _outputQueue, _readerCancellation.Token, "UnityTerminal-stdout");
-            _errorReaderThread = CreateReaderThread(_process.StandardError, _errorQueue, _readerCancellation.Token, "UnityTerminal-stderr");
+            _outputReaderThread = CreateReaderThread(_process.StandardOutput.BaseStream, _outputQueue, _readerCancellation.Token, "UnityTerminal-stdout");
+            _errorReaderThread = CreateReaderThread(_process.StandardError.BaseStream, _errorQueue, _readerCancellation.Token, "UnityTerminal-stderr");
+            UnityEngine.Debug.Log("[Terminal/ShellProcess] Starting reader threads");
             _outputReaderThread.Start();
             _errorReaderThread.Start();
         }
@@ -499,39 +717,56 @@ namespace Linalab.Terminal.Editor
             _readerCancellation = null;
         }
 
-        static Thread CreateReaderThread(StreamReader reader, ConcurrentQueue<string> queue, CancellationToken cancellationToken, string name)
+        static Thread CreateReaderThread(Stream stream, ConcurrentQueue<string> queue, CancellationToken cancellationToken, string name)
         {
-            return new Thread(() => ReadLoop(reader, queue, cancellationToken))
+            return new Thread(() => ReadLoop(stream, queue, cancellationToken))
             {
                 IsBackground = true,
                 Name = name
             };
         }
 
-        static void ReadLoop(StreamReader reader, ConcurrentQueue<string> queue, CancellationToken cancellationToken)
+        static void ReadLoop(Stream stream, ConcurrentQueue<string> queue, CancellationToken cancellationToken)
         {
-            var buffer = new char[1024];
+            var byteBuffer = new byte[4096];
+            var charBuffer = new char[4096];
+            Decoder decoder = Encoding.UTF8.GetDecoder();
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    int read = reader.Read(buffer, 0, buffer.Length);
+                    int read = stream.Read(byteBuffer, 0, byteBuffer.Length);
                     if (read <= 0)
                     {
+                        UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop reached EOF");
                         break;
                     }
 
-                    queue.Enqueue(new string(buffer, 0, read));
+                    int charCount = decoder.GetChars(byteBuffer, 0, read, charBuffer, 0, flush: false);
+                    if (charCount > 0)
+                    {
+                        UnityEngine.Debug.Log($"[Terminal/ShellProcess] ReadLoop received {charCount} chars");
+                        queue.Enqueue(new string(charBuffer, 0, charCount));
+                    }
+                }
+
+                int flushedCount = decoder.GetChars(Array.Empty<byte>(), 0, 0, charBuffer, 0, flush: true);
+                if (flushedCount > 0)
+                {
+                    queue.Enqueue(new string(charBuffer, 0, flushedCount));
                 }
             }
             catch (IOException)
             {
+                UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop IOException");
             }
             catch (ObjectDisposedException)
             {
+                UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop ObjectDisposedException");
             }
             catch (InvalidOperationException)
             {
+                UnityEngine.Debug.Log("[Terminal/ShellProcess] ReadLoop InvalidOperationException");
             }
         }
 

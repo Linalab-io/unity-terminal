@@ -15,6 +15,18 @@ namespace Linalab.Terminal.Editor
         Custom = 3
     }
 
+    public enum TerminalAppProfile
+    {
+        SystemDefault = 0,
+        Ghostty = 1,
+        Terminal = 2,
+        ITerm = 3,
+        Warp = 4,
+        WezTerm = 5,
+        Alacritty = 6,
+        Kitty = 7
+    }
+
     public static class TerminalSettings
     {
         const string Prefix = "Linalab.Terminal.";
@@ -25,6 +37,7 @@ namespace Linalab.Terminal.Editor
         const string ShellPathOverrideKey = Prefix + "ShellPathOverride";
         const string CursorBlinkRateKey = Prefix + "CursorBlinkRate";
         const string AutoAttachTmuxKey = Prefix + "AutoAttachTmux";
+        const string TerminalAppProfileKey = Prefix + "TerminalAppProfile";
 
         public static int FontSize
         {
@@ -40,9 +53,10 @@ namespace Linalab.Terminal.Editor
 
         public static string GetEffectiveFontFamily()
         {
-            if (!string.IsNullOrWhiteSpace(FontFamily))
+            string fontFamily = FontFamily;
+            if (!string.IsNullOrWhiteSpace(fontFamily))
             {
-                return FontFamily;
+                return fontFamily;
             }
 
             if (ShellProfile == TerminalShellProfile.Zsh || ResolveShellPath().EndsWith("zsh", StringComparison.OrdinalIgnoreCase))
@@ -83,6 +97,61 @@ namespace Linalab.Terminal.Editor
             set => EditorPrefs.SetBool(AutoAttachTmuxKey, value);
         }
 
+        public static TerminalAppProfile TerminalApp
+        {
+            get => (TerminalAppProfile)EditorPrefs.GetInt(TerminalAppProfileKey, (int)DetectDefaultInstalledTerminalApp());
+            set => EditorPrefs.SetInt(TerminalAppProfileKey, (int)value);
+        }
+
+        public static TerminalAppProfile DetectDefaultInstalledTerminalApp()
+        {
+            return IsTerminalAppInstalled(TerminalAppProfile.Ghostty)
+                ? TerminalAppProfile.Ghostty
+                : TerminalAppProfile.SystemDefault;
+        }
+
+        public static TerminalAppProfile[] GetInstalledTerminalApps()
+        {
+            var candidates = new[]
+            {
+                TerminalAppProfile.SystemDefault,
+                TerminalAppProfile.Ghostty,
+                TerminalAppProfile.Terminal,
+                TerminalAppProfile.ITerm,
+                TerminalAppProfile.Warp,
+                TerminalAppProfile.WezTerm,
+                TerminalAppProfile.Alacritty,
+                TerminalAppProfile.Kitty
+            };
+
+            var installed = new System.Collections.Generic.List<TerminalAppProfile>(candidates.Length);
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (candidates[i] == TerminalAppProfile.SystemDefault || IsTerminalAppInstalled(candidates[i]))
+                {
+                    installed.Add(candidates[i]);
+                }
+            }
+
+            return installed.ToArray();
+        }
+
+        public static string GetTerminalAppDisplayName(TerminalAppProfile profile)
+        {
+            return profile switch
+            {
+                TerminalAppProfile.SystemDefault => "System Default",
+                TerminalAppProfile.Ghostty => "Ghostty",
+                TerminalAppProfile.Terminal => "Terminal.app",
+                TerminalAppProfile.ITerm => "iTerm",
+                TerminalAppProfile.Warp => "Warp",
+                TerminalAppProfile.WezTerm => "WezTerm",
+                TerminalAppProfile.Alacritty => "Alacritty",
+                TerminalAppProfile.Kitty => "Kitty",
+                _ => profile.ToString()
+            };
+        }
+
         public static string ResolveShellPath()
         {
             return ShellProfile switch
@@ -96,7 +165,19 @@ namespace Linalab.Terminal.Editor
 
         public static string GetProjectRootDirectory()
         {
-            return Path.GetDirectoryName(Application.dataPath);
+            string applicationDataDirectory = NormalizeDirectoryPath(Path.GetDirectoryName(Path.GetFullPath(Application.dataPath)));
+            string dataPathRoot = FindUnityWorkspaceRoot(applicationDataDirectory);
+            if (!string.IsNullOrWhiteSpace(dataPathRoot))
+            {
+                return dataPathRoot;
+            }
+
+            if (!string.IsNullOrWhiteSpace(applicationDataDirectory))
+            {
+                return applicationDataDirectory;
+            }
+
+            return string.Empty;
         }
 
         public static string GetTmuxSessionName(string workspaceDirectory)
@@ -147,6 +228,71 @@ namespace Linalab.Terminal.Editor
             }
 
             return string.Empty;
+        }
+
+        static string FindUnityWorkspaceRoot(string startDirectory)
+        {
+            string normalizedStartDirectory = NormalizeDirectoryPath(startDirectory);
+            if (string.IsNullOrWhiteSpace(normalizedStartDirectory))
+            {
+                return string.Empty;
+            }
+
+            for (DirectoryInfo directory = new DirectoryInfo(normalizedStartDirectory); directory != null; directory = directory.Parent)
+            {
+                if (IsUnityWorkspaceRoot(directory.FullName))
+                {
+                    return directory.FullName;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        static string NormalizeDirectoryPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        static bool IsUnityWorkspaceRoot(string directory)
+        {
+            return Directory.Exists(Path.Combine(directory, "Assets"))
+                && Directory.Exists(Path.Combine(directory, "Packages"))
+                && Directory.Exists(Path.Combine(directory, "ProjectSettings"));
+        }
+
+        static bool IsTerminalAppInstalled(TerminalAppProfile profile)
+        {
+            if (profile == TerminalAppProfile.SystemDefault)
+            {
+                return true;
+            }
+
+            string appName = profile switch
+            {
+                TerminalAppProfile.Ghostty => "Ghostty.app",
+                TerminalAppProfile.Terminal => "Terminal.app",
+                TerminalAppProfile.ITerm => "iTerm.app",
+                TerminalAppProfile.Warp => "Warp.app",
+                TerminalAppProfile.WezTerm => "WezTerm.app",
+                TerminalAppProfile.Alacritty => "Alacritty.app",
+                TerminalAppProfile.Kitty => "kitty.app",
+                _ => string.Empty
+            };
+
+            if (string.IsNullOrEmpty(appName))
+            {
+                return false;
+            }
+
+            string homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Directory.Exists(Path.Combine("/Applications", appName))
+                || Directory.Exists(Path.Combine(homeDirectory, "Applications", appName));
         }
     }
 }
