@@ -309,10 +309,20 @@ namespace Linalab.Terminal.Editor
                 AdjustScroll(scrollDelta);
                 evt.Use();
             }
-            else if (evt.type == EventType.KeyDown && (GUIUtility.keyboardControl == _keyboardControlId || focusController?.focusedElement == this))
+            else if (evt.type == EventType.KeyDown)
             {
-                OnInputRequested?.Invoke(evt);
-                evt.Use();
+                // Ensure this element has keyboard control when it has focus
+                if (focusController?.focusedElement == this && GUIUtility.keyboardControl != _keyboardControlId)
+                {
+                    GUIUtility.keyboardControl = _keyboardControlId;
+                }
+                
+                // Process input if we have keyboard control
+                if (GUIUtility.keyboardControl == _keyboardControlId)
+                {
+                    OnInputRequested?.Invoke(evt);
+                    evt.Use();
+                }
             }
         }
 
@@ -783,28 +793,35 @@ namespace Linalab.Terminal.Editor
 
         static string[] ResolveFontCandidates(string preferredFontFamily)
         {
+            // Platform-specific font candidates, ordered by preference
+            // Priority: Nerd Font Mono (monospace) > Monospace base > Nerd Font (fallback)
             string[] preferredFamilies = Application.platform == RuntimePlatform.WindowsEditor
                 ? new[]
                 {
+                    // Nerd Font Mono variants (monospace with symbols)
                     "CaskaydiaCove Nerd Font Mono",
                     "JetBrainsMono Nerd Font Mono",
+                    "FiraCode Nerd Font Mono",
+                    "Hack Nerd Font Mono",
+                    
+                    // Monospace base fonts (fallback if Nerd Font not installed)
                     "Consolas",
                     "Courier New",
                     "Lucida Console"
                 }
                 : new[]
                 {
+                    // Nerd Font Mono variants (monospace with symbols) - macOS/Linux
                     "MesloLGS NF",
                     "MesloLGSNerdFontMono",
                     "MesloLGS Nerd Font Mono",
-                    "MesloLGSNerdFont",
-                    "MesloLGS Nerd Font",
-                    "MesloLGS Nerd Font",
                     "JetBrainsMono Nerd Font Mono",
                     "Hack Nerd Font Mono",
                     "HackNerdFontMono",
                     "FiraCodeNerdFontMono",
-                    "SauceCodePro Nerd Font",
+                    "FiraCode Nerd Font Mono",
+                    
+                    // Monospace base fonts (fallback if Nerd Font not installed)
                     "Menlo",
                     "Monaco",
                     "Courier"
