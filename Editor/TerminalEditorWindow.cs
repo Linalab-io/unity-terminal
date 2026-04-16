@@ -7,36 +7,30 @@ namespace Linalab.Terminal.Editor
 {
     public sealed class TerminalEditorWindow : EditorWindow
     {
-        const string AttachToTmuxSessionStateKey = "Linalab.Terminal.AttachToTmux";
         const string MenuPath = "Tools/Unity Editor Terminal";
         const int DefaultRows = 24;
         const int DefaultCols = 80;
+        const int MinimumUsableRows = 2;
+        const int MinimumUsableCols = 8;
         const float PollIntervalMs = 16f;
 
         TerminalBuffer _buffer;
         AnsiParser _parser;
         ShellProcess _shellProcess;
         TerminalSurfaceElement _terminalSurface;
+        IMGUIContainer _toolbarContainer;
+        VisualElement _surfaceContainer;
         bool _initialized;
         bool _needsResize;
         bool _terminalFocused;
+        bool _rootInputCallbacksRegistered;
         bool _editorUpdateSubscribed;
         bool _shellPumpScheduled;
         bool _surfaceAttachPending;
         bool _loggedBufferPreview;
         double _lastPollTime;
-        double _notificationHideAt;
         int _lastAppliedFontSize;
         string _lastAppliedEffectiveFontFamily;
-        TerminalCommandRouter _commandRouter;
-
-        static bool _isAssemblyReloading;
-
-        static TerminalEditorWindow()
-        {
-            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
-            AssemblyReloadEvents.afterAssemblyReload += OnAfterAssemblyReload;
-        }
 
         [MenuItem(MenuPath)]
         public static void ShowWindow()
@@ -54,35 +48,121 @@ namespace Linalab.Terminal.Editor
                 InitializeTerminal();
             }
 
+            EnsureRootLayout();
+            EnsureRootInputCallbacks();
+            EnsureToolbar();
+            EnsureSurfaceContainer();
             rootVisualElement.style.flexDirection = FlexDirection.Column;
             EnsureScheduledShellPump();
 
-            var toolbar = new IMGUIContainer(DrawToolbar);
-            toolbar.style.flexShrink = 0;
-            rootVisualElement.Add(toolbar);
-
             if (_terminalSurface == null && _buffer != null)
             {
-                _terminalSurface = new TerminalSurfaceElement(_buffer);
-                _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
-                _terminalSurface.OnInputRequested += HandleKeyInput;
-                _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
-                _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
-
-                var surfaceContainer = new VisualElement
-                {
-                    style =
-                    {
-                        flexGrow = 1,
-                        paddingLeft = 8f,
-                        paddingRight = 8f,
-                        paddingTop = 6f,
-                        paddingBottom = 6f
-                    }
-                };
-                surfaceContainer.Add(_terminalSurface);
-            rootVisualElement.Add(surfaceContainer);
+                CreateTerminalSurface();
             }
+
+            AttachSurfaceToContainer();
+        }
+
+        void EnsureRootLayout()
+        {
+            if (rootVisualElement == null)
+            {
+                return;
+            }
+
+            if (_toolbarContainer != null && _toolbarContainer.parent != rootVisualElement)
+            {
+                _toolbarContainer = null;
+            }
+
+            if (_surfaceContainer != null && _surfaceContainer.parent != rootVisualElement)
+            {
+                _surfaceContainer = null;
+            }
+        }
+
+        void EnsureRootInputCallbacks()
+        {
+            if (rootVisualElement == null || _rootInputCallbacksRegistered)
+            {
+                return;
+            }
+
+            rootVisualElement.RegisterCallback<MouseDownEvent>(OnRootMouseDown, TrickleDown.TrickleDown);
+            _rootInputCallbacksRegistered = true;
+        }
+
+        void EnsureToolbar()
+        {
+            if (rootVisualElement == null || _toolbarContainer != null)
+            {
+                return;
+            }
+
+            _toolbarContainer = new IMGUIContainer(DrawToolbar);
+            _toolbarContainer.style.flexShrink = 0;
+            rootVisualElement.Add(_toolbarContainer);
+        }
+
+        void EnsureSurfaceContainer()
+        {
+            if (rootVisualElement == null || _surfaceContainer != null)
+            {
+                return;
+            }
+
+            _surfaceContainer = new VisualElement
+            {
+                style =
+                {
+                    flexGrow = 1,
+                    flexShrink = 1,
+                    flexBasis = 0f,
+                    minWidth = 0f,
+                    minHeight = 0f,
+                    paddingLeft = 8f,
+                    paddingRight = 8f,
+                    paddingTop = 6f,
+                    paddingBottom = 6f
+                }
+            };
+            rootVisualElement.Add(_surfaceContainer);
+        }
+
+        void CreateTerminalSurface()
+        {
+            if (_terminalSurface != null || _buffer == null)
+            {
+                return;
+            }
+
+            _terminalSurface = new TerminalSurfaceElement(_buffer);
+            _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
+            _terminalSurface.OnInputRequested += HandleKeyInput;
+            _terminalSurface.OnInteractionStarted += OnSurfaceInteractionStarted;
+            _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
+            _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
+        }
+
+        void AttachSurfaceToContainer()
+        {
+            if (_terminalSurface == null)
+            {
+                return;
+            }
+
+            EnsureSurfaceContainer();
+            if (_surfaceContainer == null || _terminalSurface.parent == _surfaceContainer)
+            {
+                return;
+            }
+
+            _terminalSurface.RemoveFromHierarchy();
+            _surfaceContainer.Clear();
+            _surfaceContainer.Add(_terminalSurface);
+            _terminalFocused = true;
+            _terminalSurface.schedule.Execute(() => _terminalSurface?.Focus()).StartingIn(0);
+            _needsResize = true;
         }
 
         void EnsureScheduledShellPump()
@@ -115,27 +195,10 @@ namespace Linalab.Terminal.Editor
                     return;
                 }
 
-                _terminalSurface = new TerminalSurfaceElement(_buffer);
-                _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
-                _terminalSurface.OnInputRequested += HandleKeyInput;
-                _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
-                _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
-
-                var surfaceContainer = new VisualElement
-                {
-                    style =
-                    {
-                        flexGrow = 1,
-                        paddingLeft = 8f,
-                        paddingRight = 8f,
-                        paddingTop = 6f,
-                        paddingBottom = 6f
-                    }
-                };
-
-                surfaceContainer.Add(_terminalSurface);
-                rootVisualElement.Add(surfaceContainer);
-                _needsResize = true;
+                EnsureRootLayout();
+                EnsureToolbar();
+                CreateTerminalSurface();
+                AttachSurfaceToContainer();
                 Repaint();
             }).StartingIn(0);
         }
@@ -167,6 +230,36 @@ namespace Linalab.Terminal.Editor
             _terminalSurface?.MarkDirtyRepaint();
         }
 
+        void OnSurfaceInteractionStarted()
+        {
+            _terminalFocused = true;
+            _terminalSurface?.Focus();
+            _terminalSurface?.MarkDirtyRepaint();
+            Repaint();
+        }
+
+        void OnRootMouseDown(MouseDownEvent evt)
+        {
+            if (_terminalSurface == null || evt == null)
+            {
+                return;
+            }
+
+            var target = evt.target as VisualElement;
+            if (target == null)
+            {
+                return;
+            }
+
+            if (target == _terminalSurface || _terminalSurface.Contains(target))
+            {
+                return;
+            }
+
+            _terminalFocused = false;
+            _terminalSurface.MarkDirtyRepaint();
+        }
+
         void InitializeTerminal()
         {
             if (_initialized)
@@ -181,9 +274,6 @@ namespace Linalab.Terminal.Editor
             _lastAppliedFontSize = -1;
             _lastAppliedEffectiveFontFamily = null;
 
-            _commandRouter = new TerminalCommandRouter();
-            RegisterCommandRoutes();
-
             EnsureEditorUpdateSubscription();
             _initialized = true;
         }
@@ -197,36 +287,6 @@ namespace Linalab.Terminal.Editor
 
             EditorApplication.update += OnEditorUpdate;
             _editorUpdateSubscribed = true;
-        }
-
-        void RegisterCommandRoutes()
-        {
-            // Handler is state-sync only — must not write to the shell.
-            // The shell already has the typed command and executes it normally when
-            // Enter is forwarded by the router. This call just keeps editor state in sync
-            // so the next shell restart (which happens automatically after tmux exits) uses
-            // the correct attachToTmux = false flag.
-            _commandRouter.Register("tmux detach-client", () => SetAttachToTmuxForSession(false));
-        }
-
-        static void OnBeforeAssemblyReload()
-        {
-            _isAssemblyReloading = true;
-        }
-
-        static void OnAfterAssemblyReload()
-        {
-            _isAssemblyReloading = false;
-        }
-
-        static bool GetAttachToTmuxForSession()
-        {
-            return SessionState.GetBool(AttachToTmuxSessionStateKey, TerminalSettings.AutoAttachTmux);
-        }
-
-        static void SetAttachToTmuxForSession(bool attachToTmux)
-        {
-            SessionState.SetBool(AttachToTmuxSessionStateKey, attachToTmux);
         }
 
         void OnEditorUpdate()
@@ -274,6 +334,12 @@ namespace Linalab.Terminal.Editor
                 int newCols = Mathf.Max(1, _terminalSurface.VisibleCols);
                 int newRows = Mathf.Max(1, _terminalSurface.VisibleRows);
 
+                if (!HasUsableShellSize(newCols, newRows))
+                {
+                    Repaint();
+                    return;
+                }
+
                 // Buffer may already be the right size from OnGridSizeChanged; resize
                 // here only if it isn't (e.g. first start before geometry is known).
                 if (newCols != _buffer.Cols || newRows != _buffer.Rows)
@@ -282,26 +348,8 @@ namespace Linalab.Terminal.Editor
                     _terminalSurface.MarkDirtyRepaint();
                 }
 
-                // Always attempt the shell resize; clear the flag whether or not it
-                // succeeds so a transient failure doesn't cause an infinite retry loop.
-                if (_shellProcess.TryResize(newCols, newRows))
-                {
-                    if (GetAttachToTmuxForSession())
-                    {
-                        _shellProcess.Write("tmux setw -w window-size manual >/dev/null 2>&1 || true\n");
-                        _shellProcess.Write($"tmux resize-window -x {newCols} -y {newRows} >/dev/null 2>&1 || true\n");
-                        _shellProcess.Write($"tmux resize-pane -x {newCols} -y {newRows} -t :. >/dev/null 2>&1 || true\n");
-                        _shellProcess.Write("tmux refresh-client >/dev/null 2>&1 || true\n");
-                    }
-                }
-
+                _shellProcess.TryResize(newCols, newRows);
                 _needsResize = false;
-            }
-
-            if (_notificationHideAt > 0d && now >= _notificationHideAt)
-            {
-                RemoveNotification();
-                _notificationHideAt = 0d;
             }
 
             Repaint();
@@ -363,29 +411,9 @@ namespace Linalab.Terminal.Editor
             RefreshSurfaceStyleIfNeeded();
 
             GUILayout.BeginHorizontal(EditorStyles.toolbar);
-            // "Restart" always starts a plain shell (no tmux) regardless of previous
-            // session state. This is the safe baseline to recover a visible terminal.
             if (GUILayout.Button("Restart", EditorStyles.toolbarButton, GUILayout.Width(60f)))
             {
-                RestartShell(false);
-            }
-
-            if (GUILayout.Button("Attach tmux", EditorStyles.toolbarButton, GUILayout.Width(84f)))
-            {
-                RestartShell(true);
-            }
-
-            if (GUILayout.Button($"Open {TerminalSettings.GetTerminalAppDisplayName(TerminalSettings.TerminalApp)}", EditorStyles.toolbarButton, GUILayout.Width(140f)))
-            {
-                OpenSelectedTerminalApp();
-            }
-
-            using (new EditorGUI.DisabledScope(!GetAttachToTmuxForSession()))
-            {
-                if (GUILayout.Button("Detach tmux", EditorStyles.toolbarButton, GUILayout.Width(88f)))
-                {
-                    DetachTmuxSession();
-                }
+                RestartShell();
             }
 
             if (GUILayout.Button("Settings", EditorStyles.toolbarButton, GUILayout.Width(64f)))
@@ -416,13 +444,12 @@ namespace Linalab.Terminal.Editor
             bool shellRunning = !shellNull && _shellProcess.IsRunning;
             if (shellNull || !shellRunning)
             {
-                StartShell(GetAttachToTmuxForSession());
+                StartShell();
             }
         }
 
-        void HandleKeyInput()
+        void HandleKeyInput(Event evt)
         {
-            var evt = Event.current;
             if (evt == null || evt.type != EventType.KeyDown)
             {
                 return;
@@ -463,14 +490,6 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            translated = _commandRouter?.Route(translated);
-            if (translated == null)
-            {
-                // Intercepted by command router — consume the event, do not forward to shell.
-                evt.Use();
-                return;
-            }
-
             _shellProcess?.Write(translated);
             _terminalSurface?.ScrollToBottom();
             evt.Use();
@@ -478,21 +497,8 @@ namespace Linalab.Terminal.Editor
 
         void RestartShell()
         {
-            RestartShell(GetAttachToTmuxForSession());
-        }
-
-        void RestartShell(bool attachToTmux)
-        {
-            SetAttachToTmuxForSession(attachToTmux);
-            if (_shellProcess != null && _shellProcess.CanPreserveSessionOnReload)
-            {
-                _shellProcess.DetachPreservingSession();
-            }
-            else
-            {
-                _shellProcess?.Kill();
-                _shellProcess?.Dispose();
-            }
+            _shellProcess?.Kill();
+            _shellProcess?.Dispose();
 
             if (_buffer == null)
             {
@@ -504,16 +510,14 @@ namespace Linalab.Terminal.Editor
             }
 
             _terminalSurface?.ClearSelection();
-            _commandRouter?.Reset();
             _shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
             _parser = new AnsiParser(_buffer);
             _parser.ResponseCallback = response => _shellProcess?.Write(response);
-            StartShell(attachToTmux);
+            StartShell();
         }
 
-        void StartShell(bool attachToTmux)
+        void StartShell()
         {
-            SetAttachToTmuxForSession(attachToTmux);
             _loggedBufferPreview = false;
             if (_shellProcess == null)
             {
@@ -521,35 +525,29 @@ namespace Linalab.Terminal.Editor
             }
 
             string projectRoot = TerminalSettings.GetProjectRootDirectory();
-            int cols = _terminalSurface != null && _terminalSurface.VisibleCols > 0
-                ? _terminalSurface.VisibleCols
-                : DefaultCols;
-            int rows = _terminalSurface != null && _terminalSurface.VisibleRows > 0
-                ? _terminalSurface.VisibleRows
-                : DefaultRows;
-            _shellProcess.Start(projectRoot, attachToTmux, cols, rows);
-        }
-
-        void DetachTmuxSession()
-        {
-            SetAttachToTmuxForSession(false);
-            _shellProcess?.Write("tmux detach-client\n");
-            _terminalSurface?.ScrollToBottom();
-        }
-
-        void OpenSelectedTerminalApp()
-        {
-            string projectRoot = TerminalSettings.GetProjectRootDirectory();
-            string sessionName = TerminalSettings.GetTmuxSessionName(projectRoot);
-            if (!TerminalAppLauncher.LaunchSelected(projectRoot, sessionName, out string error))
+            int cols = DefaultCols;
+            int rows = DefaultRows;
+            if (_terminalSurface != null)
             {
-                EditorUtility.DisplayDialog("Unity Terminal", error, "OK");
-                return;
+                int candidateCols = Mathf.Max(1, _terminalSurface.VisibleCols);
+                int candidateRows = Mathf.Max(1, _terminalSurface.VisibleRows);
+                if (HasUsableShellSize(candidateCols, candidateRows))
+                {
+                    cols = candidateCols;
+                    rows = candidateRows;
+                }
+                else
+                {
+                    _needsResize = true;
+                }
             }
 
-            SetAttachToTmuxForSession(true);
-            ShowNotification(new GUIContent($"Opened {TerminalSettings.GetTerminalAppDisplayName(TerminalSettings.TerminalApp)}"));
-            _notificationHideAt = EditorApplication.timeSinceStartup + 1.2d;
+            _shellProcess.Start(projectRoot, cols, rows);
+        }
+
+        static bool HasUsableShellSize(int cols, int rows)
+        {
+            return cols >= MinimumUsableCols && rows >= MinimumUsableRows;
         }
 
         void ClearTerminal()
@@ -610,20 +608,15 @@ namespace Linalab.Terminal.Editor
             }
 
             _shellPumpScheduled = false;
-            if (_isAssemblyReloading && _shellProcess != null && _shellProcess.CanPreserveSessionOnReload)
-            {
-                _shellProcess.DetachPreservingSession();
-            }
-            else
-            {
-                _shellProcess?.Dispose();
-            }
+            _shellProcess?.Dispose();
 
             _shellProcess = null;
             _parser = null;
             _buffer = null;
+            _toolbarContainer = null;
+            _surfaceContainer = null;
             _terminalSurface = null;
-            _commandRouter = null;
+            _rootInputCallbacksRegistered = false;
             _surfaceAttachPending = false;
         }
     }

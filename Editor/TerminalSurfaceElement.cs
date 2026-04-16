@@ -6,7 +6,7 @@ using UnityEngine.UIElements;
 
 namespace Linalab.Terminal.Editor
 {
-    sealed class TerminalSurfaceElement : ImmediateModeElement
+    sealed class TerminalSurfaceElement : IMGUIContainer
     {
         readonly ITerminalBuffer _buffer;
 
@@ -20,6 +20,7 @@ namespace Linalab.Terminal.Editor
         float _cellHeight;
         float _drawCellWidth;
         float _drawCellHeight;
+        int _keyboardControlId;
         bool _cursorVisible;
         double _lastBlinkToggle;
         int _scrollbackOffset;
@@ -34,15 +35,38 @@ namespace Linalab.Terminal.Editor
         public bool HasSelection { get; private set; }
 
         public event System.Action OnGridSizeChanged;
-        public event System.Action OnInputRequested;
+        public event System.Action<Event> OnInputRequested;
+        public event System.Action OnInteractionStarted;
 
         public TerminalSurfaceElement(ITerminalBuffer buffer)
         {
             _buffer = buffer;
+            onGUIHandler = DrawImmediateGui;
             focusable = true;
+            tabIndex = 0;
+            pickingMode = PickingMode.Position;
             style.flexGrow = 1;
+            style.flexShrink = 1;
+            style.flexBasis = 0f;
+            style.minWidth = 0f;
+            style.minHeight = 0f;
+            style.alignSelf = Align.Stretch;
+            style.width = Length.Percent(100);
+            style.height = Length.Percent(100);
             style.overflow = Overflow.Hidden;
             RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
+            RegisterCallback<MouseDownEvent>(OnMouseDownEvent);
+        }
+
+        void OnMouseDownEvent(MouseDownEvent evt)
+        {
+            if (evt == null || evt.button != 0)
+            {
+                return;
+            }
+
+            OnInteractionStarted?.Invoke();
+            Focus();
         }
 
         void OnGeometryChanged(GeometryChangedEvent evt)
@@ -73,6 +97,12 @@ namespace Linalab.Terminal.Editor
         public void AdjustScroll(int delta)
         {
             _scrollbackOffset = Mathf.Clamp(_scrollbackOffset - delta, 0, _buffer.ScrollbackCount);
+            if (HasSelection)
+            {
+                ClearSelection();
+                return;
+            }
+
             MarkDirtyRepaint();
         }
 
@@ -90,8 +120,23 @@ namespace Linalab.Terminal.Editor
 
             float drawCellWidth = CellWidth;
             float drawCellHeight = CellHeight;
-            int col = Mathf.Clamp(Mathf.FloorToInt(localMousePos.x / drawCellWidth), 0, Mathf.Max(0, VisibleCols - 1));
-            int row = Mathf.Clamp(Mathf.FloorToInt(localMousePos.y / drawCellHeight), 0, Mathf.Max(0, VisibleRows - 1));
+
+            if (drawCellWidth <= 0f || drawCellHeight <= 0f)
+            {
+                position = default;
+                return false;
+            }
+
+            float gridWidth = VisibleCols * drawCellWidth;
+            float gridHeight = VisibleRows * drawCellHeight;
+            if (localMousePos.x < 0f || localMousePos.y < 0f || localMousePos.x >= gridWidth || localMousePos.y >= gridHeight)
+            {
+                position = default;
+                return false;
+            }
+
+            int col = Mathf.FloorToInt(localMousePos.x / drawCellWidth);
+            int row = Mathf.FloorToInt(localMousePos.y / drawCellHeight);
             position = new Vector2Int(col, row);
             return true;
         }
@@ -132,22 +177,36 @@ namespace Linalab.Terminal.Editor
 
             int newVisibleCols = Mathf.Max(1, Mathf.FloorToInt(contentRect.width / _cellWidth));
             int newVisibleRows = Mathf.Max(1, Mathf.FloorToInt(contentRect.height / _cellHeight));
-            _drawCellWidth = contentRect.width / newVisibleCols;
-            _drawCellHeight = contentRect.height / newVisibleRows;
 
-            if (newVisibleCols != VisibleCols || newVisibleRows != VisibleRows)
+            float newDrawCellWidth = contentRect.width / newVisibleCols;
+            float newDrawCellHeight = contentRect.height / newVisibleRows;
+            bool gridChanged = newVisibleCols != VisibleCols || newVisibleRows != VisibleRows;
+            bool drawMetricsChanged = !Mathf.Approximately(_drawCellWidth, newDrawCellWidth)
+                || !Mathf.Approximately(_drawCellHeight, newDrawCellHeight);
+
+            _drawCellWidth = newDrawCellWidth;
+            _drawCellHeight = newDrawCellHeight;
+
+            if (gridChanged)
             {
                 VisibleCols = newVisibleCols;
                 VisibleRows = newVisibleRows;
+                if (HasSelection)
+                {
+                    HasSelection = false;
+                    _selectionStart = default;
+                    _selectionEnd = default;
+                }
                 OnGridSizeChanged?.Invoke();
                 return true;
             }
 
-            return false;
+            return drawMetricsChanged;
         }
 
-        protected override void ImmediateRepaint()
+        void DrawImmediateGui()
         {
+            _keyboardControlId = GUIUtility.GetControlID(FocusType.Keyboard);
             HandleSurfaceEvent(Event.current);
             EnsureStyle();
 
@@ -163,7 +222,7 @@ namespace Linalab.Terminal.Editor
 
             TerminalTheme theme = TerminalThemeResolver.GetCurrentTheme();
             Color backgroundColor = Opaque(theme.DefaultBackground);
-            EditorGUI.DrawRect(new Rect(0, 0, clipRect.width, clipRect.height), backgroundColor);
+            EditorGUI.DrawRect(new Rect(0, 0, contentRect.width, contentRect.height), backgroundColor);
 
             int rows = Mathf.Min(VisibleRows, _buffer.Rows);
             int cols = Mathf.Min(VisibleCols, _buffer.Cols);
@@ -197,10 +256,12 @@ namespace Linalab.Terminal.Editor
 
             if (evt.type == EventType.MouseDown && evt.button == 0)
             {
+                OnInteractionStarted?.Invoke();
+                GUIUtility.keyboardControl = _keyboardControlId;
                 Focus();
                 Vector2 localPos = evt.mousePosition - contentRect.position;
 
-                if (contentRect.Contains(localPos) && TryGetCellPosition(localPos, out var cell))
+                if (contentRect.Contains(evt.mousePosition) && TryGetCellPosition(localPos, out var cell))
                 {
                     _isSelecting = true;
                     _selectionStart = cell;
@@ -237,10 +298,9 @@ namespace Linalab.Terminal.Editor
                     {
                         EditorGUIUtility.systemCopyBuffer = copiedText;
                     }
-
-                    ClearSelection();
                 }
 
+                MarkDirtyRepaint();
                 evt.Use();
             }
             else if (evt.type == EventType.ScrollWheel)
@@ -249,9 +309,9 @@ namespace Linalab.Terminal.Editor
                 AdjustScroll(scrollDelta);
                 evt.Use();
             }
-            else if (evt.type == EventType.KeyDown && focusController != null && focusController.focusedElement == this)
+            else if (evt.type == EventType.KeyDown && (GUIUtility.keyboardControl == _keyboardControlId || focusController?.focusedElement == this))
             {
-                OnInputRequested?.Invoke();
+                OnInputRequested?.Invoke(evt);
                 evt.Use();
             }
         }
@@ -294,7 +354,7 @@ namespace Linalab.Terminal.Editor
             const int widthProbeLength = 16;
             var widthProbe = new GUIContent(new string('M', widthProbeLength));
             float measuredWidth = _cellStyle.CalcSize(widthProbe).x / widthProbeLength;
-            float measuredHeight = _cellStyle.CalcSize(new GUIContent("Mg")).y;
+            float measuredHeight = Mathf.Max(_cellStyle.lineHeight, _cellStyle.CalcSize(new GUIContent("M")).y);
             _cellWidth = Mathf.Max(1f, measuredWidth);
             _cellHeight = Mathf.Max(1f, measuredHeight);
         }
@@ -329,6 +389,7 @@ namespace Linalab.Terminal.Editor
 
             var runBuilder = new StringBuilder(cols);
             int runStartCol = 0;
+            int runDisplayWidth = 0;
             Color runForeground = Opaque(theme.DefaultForeground);
             CellFlags runFlags = CellFlags.None;
             bool hasRun = false;
@@ -338,6 +399,15 @@ namespace Linalab.Terminal.Editor
                 TerminalCell cell = isScrollback
                     ? _buffer.GetScrollbackCell(scrollbackRow, col)
                     : _buffer.GetCell(displayRow, col);
+
+                bool isContinuation = cell.Codepoint == '\0';
+                bool isWideLead = !isContinuation && GetCellDisplayWidth(isScrollback, scrollbackRow, displayRow, col, cols) > 1;
+
+                if (isContinuation)
+                {
+                    FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+                    continue;
+                }
 
                 var cellRect = new Rect(
                     col * CellWidth,
@@ -360,7 +430,13 @@ namespace Linalab.Terminal.Editor
                     fgColor.b *= 0.6f;
                 }
 
-                if (HasSelection && SelectionContains(row, col))
+                bool isSelected = HasSelection && SelectionContains(row, col);
+                if (isWideLead && HasSelection && col + 1 < cols && SelectionContains(row, col + 1))
+                {
+                    isSelected = true;
+                }
+
+                if (isSelected)
                 {
                     bgColor = new Color(0.33f, 0.52f, 0.88f, 1f);
                     fgColor = Color.white;
@@ -371,31 +447,38 @@ namespace Linalab.Terminal.Editor
                     EditorGUI.DrawRect(cellRect, bgColor);
                 }
 
-                char displayCharacter = cell.Codepoint == '\0' ? ' ' : cell.Codepoint;
+                char displayCharacter = cell.Codepoint;
+                if (isWideLead)
+                {
+                    FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+                    DrawTextRun(row, col, displayCharacter.ToString(), 2, cell.Flags, fgColor);
+                    continue;
+                }
+
                 if (!hasRun)
                 {
                     hasRun = true;
                     runStartCol = col;
+                    runDisplayWidth = 0;
                     runForeground = fgColor;
                     runFlags = cell.Flags;
                     runBuilder.Clear();
                 }
                 else if (runForeground != fgColor || runFlags != cell.Flags)
                 {
-                    DrawTextRun(row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
+                    FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+                    hasRun = true;
                     runStartCol = col;
+                    runDisplayWidth = 0;
                     runForeground = fgColor;
                     runFlags = cell.Flags;
-                    runBuilder.Clear();
                 }
 
                 runBuilder.Append(displayCharacter);
+                runDisplayWidth += 1;
             }
 
-            if (hasRun)
-            {
-                DrawTextRun(row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
-            }
+            FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
         }
 
         bool SelectionContains(int row, int col)
@@ -429,9 +512,9 @@ namespace Linalab.Terminal.Editor
             return true;
         }
 
-        void DrawTextRun(int row, int startCol, string text, CellFlags flags, Color foreground)
+        void DrawTextRun(int row, int startCol, string text, int displayWidth, CellFlags flags, Color foreground)
         {
-            if (string.IsNullOrEmpty(text))
+            if (string.IsNullOrEmpty(text) || displayWidth <= 0)
             {
                 return;
             }
@@ -439,10 +522,24 @@ namespace Linalab.Terminal.Editor
             var runRect = new Rect(
                 startCol * CellWidth,
                 row * CellHeight,
-                text.Length * CellWidth,
+                displayWidth * CellWidth,
                 CellHeight);
 
             GUI.Label(runRect, text, GetModifiedStyle(flags, foreground));
+        }
+
+        void FlushTextRun(int row, ref bool hasRun, ref int runStartCol, ref int runDisplayWidth, StringBuilder runBuilder, ref CellFlags runFlags, ref Color runForeground)
+        {
+            if (!hasRun)
+            {
+                return;
+            }
+
+            DrawTextRun(row, runStartCol, runBuilder.ToString(), runDisplayWidth, runFlags, runForeground);
+            hasRun = false;
+            runStartCol = 0;
+            runDisplayWidth = 0;
+            runBuilder.Clear();
         }
 
         void DrawCursor(TerminalTheme theme)
@@ -458,15 +555,30 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
+            int anchorCol = cursor.Col;
+            int cursorWidth = 1;
+            var cell = _buffer.GetCell(cursor.Row, cursor.Col);
+            if (IsContinuationCell(cell))
+            {
+                int leadCol = cursor.Col - 1;
+                if (leadCol < 0 || !IsWideLeadCell(false, -1, cursor.Row, leadCol, VisibleCols))
+                {
+                    return;
+                }
+
+                anchorCol = leadCol;
+                cursorWidth = 2;
+                cell = _buffer.GetCell(cursor.Row, leadCol);
+            }
+
             var cursorRect = new Rect(
-                cursor.Col * CellWidth,
+                anchorCol * CellWidth,
                 cursor.Row * CellHeight,
-                CellWidth,
+                cursorWidth * CellWidth,
                 CellHeight);
 
             EditorGUI.DrawRect(cursorRect, Opaque(theme.CursorColor));
 
-            var cell = _buffer.GetCell(cursor.Row, cursor.Col);
             if (cell.Codepoint != ' ')
             {
                 GUI.Label(cursorRect, cell.Codepoint.ToString(), GetModifiedStyle(CellFlags.None, Opaque(theme.DefaultBackground)));
@@ -522,16 +634,72 @@ namespace Linalab.Terminal.Editor
 
         float GetCellDrawWidth(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
         {
-            if (col + 1 >= cols)
+            return CellWidth * GetCellDisplayWidth(isScrollback, scrollbackRow, displayRow, col, cols);
+        }
+
+        int GetCellDisplayWidth(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
+        {
+            return IsWideLeadCell(isScrollback, scrollbackRow, displayRow, col, cols) ? 2 : 1;
+        }
+
+        bool IsWideLeadCell(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
+        {
+            if (col < 0 || col + 1 >= cols)
             {
-                return CellWidth;
+                return false;
             }
 
-            TerminalCell nextCell = isScrollback
-                ? _buffer.GetScrollbackCell(scrollbackRow, col + 1)
-                : _buffer.GetCell(displayRow, col + 1);
+            TerminalCell cell = isScrollback
+                ? _buffer.GetScrollbackCell(scrollbackRow, col)
+                : _buffer.GetCell(displayRow, col);
 
-            return nextCell.Codepoint == '\0' ? CellWidth * 2f : CellWidth;
+            return !IsContinuationCell(cell)
+                && GetDisplayWidth(cell.Codepoint) > 1
+                && IsValidContinuationCell(isScrollback, scrollbackRow, displayRow, col + 1, cols);
+        }
+
+        bool IsValidContinuationCell(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
+        {
+            if (col <= 0 || col >= cols)
+            {
+                return false;
+            }
+
+            TerminalCell cell = isScrollback
+                ? _buffer.GetScrollbackCell(scrollbackRow, col)
+                : _buffer.GetCell(displayRow, col);
+
+            TerminalCell leftCell = isScrollback
+                ? _buffer.GetScrollbackCell(scrollbackRow, col - 1)
+                : _buffer.GetCell(displayRow, col - 1);
+
+            return IsContinuationCell(cell)
+                && !IsContinuationCell(leftCell)
+                && GetDisplayWidth(leftCell.Codepoint) > 1;
+        }
+
+        static bool IsContinuationCell(TerminalCell cell)
+        {
+            return cell.Codepoint == '\0';
+        }
+
+        static int GetDisplayWidth(char character)
+        {
+            int codepoint = character;
+
+            return codepoint switch
+            {
+                >= 0x1100 and <= 0x115F => 2,
+                >= 0x2329 and <= 0x232A => 2,
+                >= 0x2E80 and <= 0xA4CF => 2,
+                >= 0xAC00 and <= 0xD7A3 => 2,
+                >= 0xF900 and <= 0xFAFF => 2,
+                >= 0xFE10 and <= 0xFE19 => 2,
+                >= 0xFE30 and <= 0xFE6F => 2,
+                >= 0xFF00 and <= 0xFF60 => 2,
+                >= 0xFFE0 and <= 0xFFE6 => 2,
+                _ => 1
+            };
         }
 
         void NormalizeSelection(out Vector2Int normalizedStart, out Vector2Int normalizedEnd)
@@ -627,9 +795,15 @@ namespace Linalab.Terminal.Editor
                 : new[]
                 {
                     "MesloLGS NF",
+                    "MesloLGSNerdFontMono",
+                    "MesloLGS Nerd Font Mono",
+                    "MesloLGSNerdFont",
+                    "MesloLGS Nerd Font",
                     "MesloLGS Nerd Font",
                     "JetBrainsMono Nerd Font Mono",
                     "Hack Nerd Font Mono",
+                    "HackNerdFontMono",
+                    "FiraCodeNerdFontMono",
                     "SauceCodePro Nerd Font",
                     "Menlo",
                     "Monaco",

@@ -368,6 +368,21 @@ namespace Linalab.Terminal.Editor
                     ? _buffer.GetScrollbackCell(scrollbackRow, col)
                     : _buffer.GetCell(displayRow, col);
 
+                bool isContinuation = IsContinuationCell(cell);
+                bool isWideLead = !isContinuation && IsWideLeadCell(isScrollback, scrollbackRow, displayRow, col, cols);
+
+                if (isContinuation)
+                {
+                    if (hasRun)
+                    {
+                        DrawTextRun(area, row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
+                        hasRun = false;
+                        runBuilder.Clear();
+                    }
+
+                    continue;
+                }
+
                 var cellRect = new Rect(
                     area.x + (col * _cellWidth),
                     area.y + (row * _cellHeight),
@@ -389,7 +404,13 @@ namespace Linalab.Terminal.Editor
                     fgColor.b *= 0.6f;
                 }
 
-                if (_selection.HasValue && _selection.Value.Contains(row, col))
+                bool isSelected = _selection.HasValue && _selection.Value.Contains(row, col);
+                if (isWideLead && _selection.HasValue && col + 1 < cols && _selection.Value.Contains(row, col + 1))
+                {
+                    isSelected = true;
+                }
+
+                if (isSelected)
                 {
                     bgColor = new Color(0.33f, 0.52f, 0.88f, 1f);
                     fgColor = Color.white;
@@ -400,7 +421,19 @@ namespace Linalab.Terminal.Editor
                     EditorDrawRect(cellRect, bgColor);
                 }
 
-                var displayCharacter = cell.Codepoint == '\0' ? ' ' : cell.Codepoint;
+                if (isWideLead)
+                {
+                    if (hasRun)
+                    {
+                        DrawTextRun(area, row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
+                        hasRun = false;
+                        runBuilder.Clear();
+                    }
+
+                    DrawTextRun(area, row, col, cell.Codepoint.ToString(), cell.Flags, fgColor, 2);
+                    continue;
+                }
+
                 if (!hasRun)
                 {
                     hasRun = true;
@@ -418,7 +451,7 @@ namespace Linalab.Terminal.Editor
                     runBuilder.Clear();
                 }
 
-                runBuilder.Append(displayCharacter);
+                runBuilder.Append(cell.Codepoint);
             }
 
             if (hasRun)
@@ -476,21 +509,12 @@ namespace Linalab.Terminal.Editor
 
         float GetCellDrawWidth(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
         {
-            if (col + 1 >= cols)
-            {
-                return _cellWidth;
-            }
-
-            TerminalCell nextCell = isScrollback
-                ? _buffer.GetScrollbackCell(scrollbackRow, col + 1)
-                : _buffer.GetCell(displayRow, col + 1);
-
-            return nextCell.Codepoint == '\0' ? _cellWidth * 2f : _cellWidth;
+            return IsWideLeadCell(isScrollback, scrollbackRow, displayRow, col, cols) ? _cellWidth * 2f : _cellWidth;
         }
 
-        void DrawTextRun(Rect area, int row, int startCol, string text, CellFlags flags, Color foreground)
+        void DrawTextRun(Rect area, int row, int startCol, string text, CellFlags flags, Color foreground, int displayWidth)
         {
-            if (string.IsNullOrEmpty(text))
+            if (string.IsNullOrEmpty(text) || displayWidth <= 0)
             {
                 return;
             }
@@ -498,10 +522,15 @@ namespace Linalab.Terminal.Editor
             var runRect = new Rect(
                 area.x + (startCol * _cellWidth),
                 area.y + (row * _cellHeight),
-                text.Length * _cellWidth,
+                displayWidth * _cellWidth,
                 _cellHeight);
 
             GUI.Label(runRect, text, GetModifiedStyle(flags, foreground));
+        }
+
+        void DrawTextRun(Rect area, int row, int startCol, string text, CellFlags flags, Color foreground)
+        {
+            DrawTextRun(area, row, startCol, text, flags, foreground, text?.Length ?? 0);
         }
 
         void DrawCursor(Rect area)
@@ -517,10 +546,26 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
+            int anchorCol = cursor.Col;
+            int cursorWidth = 1;
+            var cell = _buffer.GetCell(cursor.Row, cursor.Col);
+            if (IsContinuationCell(cell))
+            {
+                int leadCol = cursor.Col - 1;
+                if (leadCol < 0 || !IsWideLeadCell(false, -1, cursor.Row, leadCol, VisibleCols))
+                {
+                    return;
+                }
+
+                anchorCol = leadCol;
+                cursorWidth = 2;
+                cell = _buffer.GetCell(cursor.Row, leadCol);
+            }
+
             var cursorRect = new Rect(
-                area.x + (cursor.Col * _cellWidth),
+                area.x + (anchorCol * _cellWidth),
                 area.y + (cursor.Row * _cellHeight),
-                _cellWidth,
+                cursorWidth * _cellWidth,
                 _cellHeight);
 
             var previousColor = GUI.color;
@@ -530,11 +575,70 @@ namespace Linalab.Terminal.Editor
             GUI.DrawTexture(cursorRect, Texture2D.whiteTexture);
             GUI.color = previousColor;
 
-            var cell = _buffer.GetCell(cursor.Row, cursor.Col);
             if (cell.Codepoint != ' ')
             {
                 GUI.Label(cursorRect, cell.Codepoint.ToString(), GetModifiedStyle(CellFlags.None, Opaque(theme.DefaultBackground)));
             }
+        }
+
+        bool IsWideLeadCell(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
+        {
+            if (col < 0 || col + 1 >= cols)
+            {
+                return false;
+            }
+
+            TerminalCell cell = isScrollback
+                ? _buffer.GetScrollbackCell(scrollbackRow, col)
+                : _buffer.GetCell(displayRow, col);
+
+            return !IsContinuationCell(cell)
+                && GetDisplayWidth(cell.Codepoint) > 1
+                && IsValidContinuationCell(isScrollback, scrollbackRow, displayRow, col + 1, cols);
+        }
+
+        bool IsValidContinuationCell(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
+        {
+            if (col <= 0 || col >= cols)
+            {
+                return false;
+            }
+
+            TerminalCell cell = isScrollback
+                ? _buffer.GetScrollbackCell(scrollbackRow, col)
+                : _buffer.GetCell(displayRow, col);
+
+            TerminalCell leftCell = isScrollback
+                ? _buffer.GetScrollbackCell(scrollbackRow, col - 1)
+                : _buffer.GetCell(displayRow, col - 1);
+
+            return IsContinuationCell(cell)
+                && !IsContinuationCell(leftCell)
+                && GetDisplayWidth(leftCell.Codepoint) > 1;
+        }
+
+        static bool IsContinuationCell(TerminalCell cell)
+        {
+            return cell.Codepoint == '\0';
+        }
+
+        static int GetDisplayWidth(char character)
+        {
+            int codepoint = character;
+
+            return codepoint switch
+            {
+                >= 0x1100 and <= 0x115F => 2,
+                >= 0x2329 and <= 0x232A => 2,
+                >= 0x2E80 and <= 0xA4CF => 2,
+                >= 0xAC00 and <= 0xD7A3 => 2,
+                >= 0xF900 and <= 0xFAFF => 2,
+                >= 0xFE10 and <= 0xFE19 => 2,
+                >= 0xFE30 and <= 0xFE6F => 2,
+                >= 0xFF00 and <= 0xFF60 => 2,
+                >= 0xFFE0 and <= 0xFFE6 => 2,
+                _ => 1
+            };
         }
 
         static Color Opaque(Color color)

@@ -13,7 +13,7 @@ namespace Linalab.Terminal.Editor
     {
         bool IsRunning { get; }
         int ProcessId { get; }
-        void Start(string workingDirectory = null, bool attachToTmux = false, int cols = 80, int rows = 24);
+        void Start(string workingDirectory = null, int cols = 80, int rows = 24);
         void Write(string input);
         void WriteByte(byte value);
         void Kill();
@@ -33,7 +33,6 @@ namespace Linalab.Terminal.Editor
         Thread _errorReaderThread;
         bool _disposed;
         int _exitEventRaised;
-        bool _attachToTmux;
 
         public ShellProcess(string shellPathOverride = null)
         {
@@ -74,8 +73,6 @@ namespace Linalab.Terminal.Editor
             }
         }
 
-        public bool CanPreserveSessionOnReload => _attachToTmux;
-
         public static string DetectShell()
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -107,7 +104,7 @@ namespace Linalab.Terminal.Editor
             return "/bin/bash";
         }
 
-        public void Start(string workingDirectory = null, bool attachToTmux = false, int cols = 80, int rows = 24)
+        public void Start(string workingDirectory = null, int cols = 80, int rows = 24)
         {
             ThrowIfDisposed();
 
@@ -124,9 +121,8 @@ namespace Linalab.Terminal.Editor
                 }
 
                 DisposeProcess();
-                _attachToTmux = attachToTmux;
                 var shellPath = ResolveStartShellPath(_shellPath);
-                var startInfo = CreateStartInfo(shellPath, workingDirectory, attachToTmux, cols, rows);
+                var startInfo = CreateStartInfo(shellPath, workingDirectory, cols, rows);
 
                 _process = new Process
                 {
@@ -250,53 +246,15 @@ namespace Linalab.Terminal.Editor
                 }
             }
 
-            if (!TryGetControllingTerminalPath(processId, out var terminalPath))
+            if (!TryResolveResizeTarget(processId, out int targetProcessId, out var terminalPath))
             {
                 return false;
             }
 
             ApplyTerminalSize(terminalPath, cols, rows);
-            int processGroupId = GetForegroundProcessGroupId(processId);
-            SignalWindowSizeChanged(processId, processGroupId);
+            int processGroupId = GetForegroundProcessGroupId(targetProcessId);
+            SignalWindowSizeChanged(targetProcessId, processGroupId);
             return true;
-        }
-
-        public void DetachPreservingSession()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            Process process;
-            lock (_syncRoot)
-            {
-                process = _process;
-            }
-
-            if (_attachToTmux)
-            {
-                Write("tmux setw -w window-size latest >/dev/null 2>&1 || true\n");
-                Write("tmux detach-client\n");
-            }
-
-            if (IsProcessRunning(process))
-            {
-                try
-                {
-                    Thread.Sleep(100);
-                }
-                catch (ThreadInterruptedException)
-                {
-                }
-
-                TerminateProcess(process);
-            }
-
-            lock (_syncRoot)
-            {
-                DisposeProcess();
-            }
         }
 
         public void DrainOutput(Action<string> handler)
@@ -429,12 +387,12 @@ namespace Linalab.Terminal.Editor
             return "/bin/bash";
         }
 
-        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory, bool attachToTmux, int cols, int rows)
+        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory, int cols, int rows)
         {
             var startInfo = new ProcessStartInfo
             {
                 FileName = shellPath,
-                Arguments = GetShellArguments(shellPath, workingDirectory, attachToTmux),
+                Arguments = GetShellArguments(shellPath),
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -452,6 +410,7 @@ namespace Linalab.Terminal.Editor
 
             startInfo.Environment["TERM"] = "xterm-256color";
             startInfo.Environment["LANG"] = "en_US.UTF-8";
+            startInfo.Environment["LC_ALL"] = "en_US.UTF-8";
             startInfo.Environment["PYTHONUNBUFFERED"] = "1";
             startInfo.Environment["COLUMNS"] = Math.Max(1, cols).ToString(CultureInfo.InvariantCulture);
             startInfo.Environment["LINES"] = Math.Max(1, rows).ToString(CultureInfo.InvariantCulture);
@@ -459,7 +418,7 @@ namespace Linalab.Terminal.Editor
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists("/usr/bin/script"))
             {
                 startInfo.FileName = "/usr/bin/script";
-                startInfo.Arguments = CreatePseudoTerminalArguments(shellPath, workingDirectory, attachToTmux);
+                startInfo.Arguments = CreatePseudoTerminalArguments(shellPath);
             }
 
             return startInfo;
@@ -505,6 +464,85 @@ namespace Linalab.Terminal.Editor
             catch (IOException)
             {
                 return false;
+            }
+        }
+
+        static bool TryResolveResizeTarget(int processId, out int targetProcessId, out string terminalPath)
+        {
+            targetProcessId = processId;
+            if (TryGetControllingTerminalPath(processId, out terminalPath))
+            {
+                return true;
+            }
+
+            foreach (int childProcessId in GetChildProcessIds(processId))
+            {
+                if (!TryGetControllingTerminalPath(childProcessId, out terminalPath))
+                {
+                    continue;
+                }
+
+                targetProcessId = childProcessId;
+                return true;
+            }
+
+            terminalPath = null;
+            return false;
+        }
+
+        static int[] GetChildProcessIds(int parentProcessId)
+        {
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "/usr/bin/pgrep",
+                        Arguments = $"-P {parentProcessId}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit(250);
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    return Array.Empty<int>();
+                }
+
+                string[] lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                var childProcessIds = new int[lines.Length];
+                int count = 0;
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    if (!int.TryParse(lines[i].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int childProcessId))
+                    {
+                        continue;
+                    }
+
+                    childProcessIds[count++] = childProcessId;
+                }
+
+                if (count == childProcessIds.Length)
+                {
+                    return childProcessIds;
+                }
+
+                Array.Resize(ref childProcessIds, count);
+                return childProcessIds;
+            }
+            catch (InvalidOperationException)
+            {
+                return Array.Empty<int>();
+            }
+            catch (IOException)
+            {
+                return Array.Empty<int>();
             }
         }
 
@@ -601,17 +639,17 @@ namespace Linalab.Terminal.Editor
             }
         }
 
-        static string CreatePseudoTerminalArguments(string shellPath, string workingDirectory, bool attachToTmux)
+        static string CreatePseudoTerminalArguments(string shellPath)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                return $"-q /dev/null {QuoteArgument(shellPath)} {GetShellArguments(shellPath, workingDirectory, attachToTmux)}".Trim();
+                return $"-q /dev/null {QuoteArgument(shellPath)} {GetShellArguments(shellPath)}".Trim();
             }
 
-            return $"-q -c {QuoteArgument($"{shellPath} {GetShellArguments(shellPath, workingDirectory, attachToTmux)}".Trim())} /dev/null";
+            return $"-q -c {QuoteArgument($"{shellPath} {GetShellArguments(shellPath)}".Trim())} /dev/null";
         }
 
-        static string GetShellArguments(string shellPath, string workingDirectory, bool attachToTmux)
+        static string GetShellArguments(string shellPath)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
@@ -624,28 +662,13 @@ namespace Linalab.Terminal.Editor
                 return "-NoLogo";
             }
 
-            string tmuxStartupCommand = BuildTmuxStartupCommand(shellPath, workingDirectory, attachToTmux);
-            if (!string.IsNullOrEmpty(tmuxStartupCommand))
-            {
-                return $"-i -c {QuoteArgument(tmuxStartupCommand)}";
-            }
-
             return GetInteractiveShellArguments(shellPath);
         }
 
         static string GetInteractiveShellArguments(string shellPath)
         {
-            string fileName = Path.GetFileName(shellPath);
-            if (string.Equals(fileName, "bash", StringComparison.OrdinalIgnoreCase))
-            {
-                return "-i";
-            }
-
-            if (string.Equals(fileName, "zsh", StringComparison.OrdinalIgnoreCase))
-            {
-                return "-i";
-            }
-
+            // Use a plain interactive shell so the user's profile/rc files run and
+            // the default shell prompt remains visible.
             return "-i";
         }
 
@@ -671,28 +694,6 @@ namespace Linalab.Terminal.Editor
             }
 
             return false;
-        }
-
-        static string BuildTmuxStartupCommand(string shellPath, string workingDirectory, bool attachToTmux)
-        {
-            if (!attachToTmux)
-            {
-                return null;
-            }
-
-            string sessionName = TerminalSettings.GetTmuxSessionName(workingDirectory);
-            string tmuxCommand = $"env TMUX= tmux new-session -A -s {QuoteForShell(sessionName)}";
-            if (!string.IsNullOrWhiteSpace(workingDirectory))
-            {
-                tmuxCommand += $" -c {QuoteForShell(workingDirectory)}";
-            }
-
-            return $"if command -v tmux >/dev/null 2>&1; then exec {tmuxCommand}; else exec {QuoteForShell(shellPath)} -i; fi";
-        }
-
-        static string QuoteForShell(string value)
-        {
-            return $"'{value.Replace("'", "'\"'\"'")}'";
         }
 
         void StartReaders()

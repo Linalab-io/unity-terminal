@@ -120,6 +120,8 @@ namespace Linalab.Terminal.Editor
                 ApplyPendingWrap();
             }
 
+            SanitizeWriteSpan(_cursor.Row, _cursor.Col, width);
+
             _grid[_cursor.Row, _cursor.Col] = new TerminalCell
             {
                 Codepoint = c,
@@ -417,6 +419,8 @@ namespace Linalab.Terminal.Editor
                 {
                     newGrid[row, col] = _grid[row, col];
                 }
+
+                SanitizeRow(newGrid, row, cols);
             }
 
             _grid = newGrid;
@@ -609,10 +613,111 @@ namespace Linalab.Terminal.Editor
         {
             int from = Math.Max(0, startCol);
             int to = Math.Min(Cols - 1, endCol);
+            ExpandSanitizedSpan(row, ref from, ref to);
             for (int col = from; col <= to; col++)
             {
                 _grid[row, col] = TerminalCell.Empty;
             }
+
+            if (from <= to)
+            {
+                SanitizeBoundaryAt(row, from - 1);
+                SanitizeBoundaryAt(row, to + 1);
+            }
+        }
+
+        void SanitizeWriteSpan(int row, int startCol, int width)
+        {
+            int from = Math.Max(0, startCol);
+            int to = Math.Min(Cols - 1, startCol + Math.Max(1, width) - 1);
+            if (from > to)
+            {
+                return;
+            }
+
+            ExpandSanitizedSpan(row, ref from, ref to);
+
+            for (int col = from; col <= to; col++)
+            {
+                _grid[row, col] = TerminalCell.Empty;
+            }
+
+            SanitizeBoundaryAt(row, from - 1);
+            SanitizeBoundaryAt(row, from);
+            SanitizeBoundaryAt(row, to);
+            SanitizeBoundaryAt(row, to + 1);
+        }
+
+        void ExpandSanitizedSpan(int row, ref int from, ref int to)
+        {
+            if ((uint)row >= (uint)Rows || from > to)
+            {
+                return;
+            }
+
+            if (IsValidContinuationCell(_grid, row, from, Cols))
+            {
+                from = Math.Max(0, from - 1);
+            }
+
+            if (IsWideLeadCell(_grid, row, to, Cols))
+            {
+                to = Math.Min(Cols - 1, to + 1);
+            }
+        }
+
+        void SanitizeBoundaryAt(int row, int col)
+        {
+            if ((uint)row >= (uint)Rows || (uint)col >= (uint)Cols)
+            {
+                return;
+            }
+
+            if (!IsContinuationCell(_grid[row, col]))
+            {
+                return;
+            }
+
+            if (!IsValidContinuationCell(_grid, row, col, Cols))
+            {
+                _grid[row, col] = TerminalCell.Empty;
+            }
+        }
+
+        static void SanitizeRow(TerminalCell[,] grid, int row, int cols)
+        {
+            for (int col = 0; col < cols; col++)
+            {
+                if (grid[row, col].Codepoint != ContinuationSpacer)
+                {
+                    continue;
+                }
+
+                if (!IsValidContinuationCell(grid, row, col, cols))
+                {
+                    grid[row, col] = TerminalCell.Empty;
+                }
+            }
+        }
+
+        static bool IsContinuationCell(TerminalCell cell)
+        {
+            return cell.Codepoint == ContinuationSpacer;
+        }
+
+        static bool IsWideLeadCell(TerminalCell[,] grid, int row, int col, int cols)
+        {
+            return (uint)col < (uint)(cols - 1)
+                && GetDisplayWidth(grid[row, col].Codepoint) > 1
+                && IsContinuationCell(grid[row, col + 1]);
+        }
+
+        static bool IsValidContinuationCell(TerminalCell[,] grid, int row, int col, int cols)
+        {
+            return (uint)col < (uint)cols
+                && IsContinuationCell(grid[row, col])
+                && col > 0
+                && IsWideLeadCell(grid, row, col - 1, cols);
         }
 
         void ResetAttributesInternal()

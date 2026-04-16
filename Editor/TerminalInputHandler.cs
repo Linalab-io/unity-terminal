@@ -45,9 +45,70 @@ namespace Linalab.Terminal.Editor
                 return true;
             }
 
+            if (TryTranslatePrintableKeyCode(evt, out translated))
+            {
+                return true;
+            }
+
             translated = null;
             return false;
         }
+
+        static bool TryTranslatePrintableKeyCode(Event evt, out string translated)
+        {
+            translated = null;
+            if (evt == null || evt.command || evt.control || evt.alt)
+            {
+                return false;
+            }
+
+            if (evt.keyCode >= KeyCode.A && evt.keyCode <= KeyCode.Z)
+            {
+                char baseCharacter = (char)('a' + (evt.keyCode - KeyCode.A));
+                translated = (evt.shift ? char.ToUpperInvariant(baseCharacter) : baseCharacter).ToString();
+                return true;
+            }
+
+            if (evt.keyCode >= KeyCode.Alpha0 && evt.keyCode <= KeyCode.Alpha9)
+            {
+                int index = evt.keyCode - KeyCode.Alpha0;
+                translated = evt.shift ? ShiftedNumberSymbols[index] : ((char)('0' + index)).ToString();
+                return true;
+            }
+
+            translated = evt.keyCode switch
+            {
+                KeyCode.Space => " ",
+                KeyCode.Minus => evt.shift ? "_" : "-",
+                KeyCode.Equals => evt.shift ? "+" : "=",
+                KeyCode.LeftBracket => evt.shift ? "{" : "[",
+                KeyCode.RightBracket => evt.shift ? "}" : "]",
+                KeyCode.Backslash => evt.shift ? "|" : "\\",
+                KeyCode.Semicolon => evt.shift ? ":" : ";",
+                KeyCode.Quote => evt.shift ? "\"" : "'",
+                KeyCode.BackQuote => evt.shift ? "~" : "`",
+                KeyCode.Comma => evt.shift ? "<" : ",",
+                KeyCode.Period => evt.shift ? ">" : ".",
+                KeyCode.Slash => evt.shift ? "?" : "/",
+                _ => null
+            };
+
+            return translated != null;
+        }
+
+        static readonly string[] ShiftedNumberSymbols =
+        {
+            ")",
+            "!",
+            "@",
+            "#",
+            "$",
+            "%",
+            "^",
+            "&",
+            "*",
+            "("
+        };
 
         static bool TryTranslateControlLetter(Event evt, out string translated)
         {

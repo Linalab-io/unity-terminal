@@ -85,40 +85,12 @@ namespace Linalab.Terminal.Editor
 
         static TerminalTheme ResolveTheme()
         {
-            if (TerminalSettings.TerminalApp == TerminalAppProfile.Ghostty)
-            {
-                TerminalTheme ghosttyTheme = TryLoadGhosttyTheme();
-                if (ghosttyTheme != null)
-                {
-                    return ghosttyTheme;
-                }
-            }
-
             return new TerminalTheme(AnsiPalette.BuildDefaultPalette(), AnsiPalette.FallbackDefaultForeground, AnsiPalette.FallbackDefaultBackground, AnsiPalette.FallbackCursorColor);
         }
 
         static string BuildSignature()
         {
-            if (TerminalSettings.TerminalApp != TerminalAppProfile.Ghostty)
-            {
-                return TerminalSettings.TerminalApp.ToString();
-            }
-
-            var signature = new System.Text.StringBuilder(TerminalSettings.TerminalApp.ToString());
-            for (var i = 0; i < GhosttyConfigPaths.Length; i++)
-            {
-                if (!File.Exists(GhosttyConfigPaths[i]))
-                {
-                    continue;
-                }
-
-                signature.Append('|');
-                signature.Append(GhosttyConfigPaths[i]);
-                signature.Append('|');
-                signature.Append(File.GetLastWriteTimeUtc(GhosttyConfigPaths[i]).Ticks);
-            }
-
-            return signature.ToString();
+            return "default-theme";
         }
 
         static TerminalTheme TryLoadGhosttyTheme()

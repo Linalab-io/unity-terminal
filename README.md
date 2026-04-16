@@ -13,7 +13,8 @@ If this project helps your workflow, you can [support it on GitHub Sponsors](htt
 - Open a terminal from the Unity Editor menu.
 - Run an interactive POSIX shell inside the editor.
 - Parse ANSI output and render it in an IMGUI terminal surface.
-- Configure shell, working directory, tmux auto-attach, font, scrollback, and cursor blink settings from Unity Preferences.
+- Resize the in-editor terminal grid from the live Unity container size.
+- Configure shell, font, scrollback, and cursor blink settings from Unity Preferences.
 - Keep terminal state, rendering, parsing, and process management separated in a small editor-only assembly.
 
 ## Installation
@@ -58,8 +59,6 @@ Available settings include:
 
 - Shell profile
 - Custom shell path
-- Default working directory
-- tmux auto-attach
 - Font family
 - Font size
 - Scrollback limit
@@ -85,14 +84,14 @@ Core files:
 - `Editor/ShellProcess.cs` — shell startup, process lifecycle, output draining
 - `Editor/AnsiParser.cs` — ANSI escape sequence parsing
 - `Editor/TerminalBuffer.cs` — terminal grid, cursor, and scrollback model
-- `Editor/TerminalRenderer.cs` — IMGUI drawing and selection rendering
+- `Editor/TerminalSurfaceElement.cs` — UI Toolkit-hosted IMGUI drawing and selection rendering
 
 ## How It Works
 
 The runtime flow is:
 
 ```text
-ShellProcess -> AnsiParser -> TerminalBuffer -> TerminalRenderer
+ShellProcess -> AnsiParser -> TerminalBuffer -> TerminalSurfaceElement
 ```
 
 This keeps shell I/O, parsing, state, and drawing responsibilities separated inside the `Linalab.Terminal.Editor` assembly.
@@ -102,7 +101,6 @@ This keeps shell I/O, parsing, state, and drawing responsibilities separated ins
 - **Windows is not supported yet.** `ShellProcess.Start()` throws a `PlatformNotSupportedException` on Windows.
 - **This package is shell-oriented for POSIX environments.** It assumes a shell can be resolved from `$SHELL`, `/bin/zsh`, or `/bin/bash`.
 - **No repo-local test or CI workflow is present today.**
-- **tmux integration is optional.** If enabled, the package attempts to auto-attach to a generated session name and falls back to the shell when tmux is unavailable.
 
 ## Development Notes
 
