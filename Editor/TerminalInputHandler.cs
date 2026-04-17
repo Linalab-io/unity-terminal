@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -23,64 +22,47 @@ namespace Linalab.Terminal.Editor
 
     public static class TerminalInputHandler
     {
-        static readonly string[] SupportedImageExtensions =
-        {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".bmp",
-            ".tga",
-            ".tif",
-            ".tiff",
-            ".psd",
-            ".exr",
-            ".hdr"
-        };
-
         public static string TranslateKeyEvent(Event evt)
         {
             return TranslateKeyEvent(evt, Input.compositionString);
         }
 
-        public static string BuildImageDropInput(string projectRootDirectory, string path)
+        public static string BuildDropInput(string projectRootDirectory, System.Collections.Generic.IEnumerable<string> paths)
         {
-            if (string.IsNullOrWhiteSpace(path))
+            if (paths == null)
             {
                 return null;
             }
 
-            var normalizedPath = NormalizeAttachmentPath(projectRootDirectory, path);
-            if (string.IsNullOrWhiteSpace(normalizedPath))
+            var builder = new System.Text.StringBuilder();
+            foreach (var path in paths)
             {
-                return null;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                var normalizedPath = NormalizeAttachmentPath(projectRootDirectory, path);
+                if (string.IsNullOrWhiteSpace(normalizedPath))
+                {
+                    continue;
+                }
+
+                if (builder.Length > 0)
+                {
+                    builder.Append(' ');
+                }
+
+                builder.Append('@');
+                builder.Append(normalizedPath);
             }
 
-            return $"@{normalizedPath}";
+            return builder.Length == 0 ? null : builder.ToString();
         }
 
-        public static bool IsSupportedImagePath(string path)
+        public static string BuildDropInput(string projectRootDirectory, string path)
         {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return false;
-            }
-
-            var extension = Path.GetExtension(path);
-            if (string.IsNullOrWhiteSpace(extension))
-            {
-                return false;
-            }
-
-            foreach (var candidate in SupportedImageExtensions)
-            {
-                if (string.Equals(extension, candidate, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return BuildDropInput(projectRootDirectory, new[] { path });
         }
 
         public static string TranslateKeyEvent(char character, KeyCode keyCode, bool control, bool shift, string composition)

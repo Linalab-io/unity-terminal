@@ -85,12 +85,36 @@ namespace Linalab.Terminal.Editor
 
         static TerminalTheme ResolveTheme()
         {
-            return new TerminalTheme(AnsiPalette.BuildDefaultPalette(), AnsiPalette.FallbackDefaultForeground, AnsiPalette.FallbackDefaultBackground, AnsiPalette.FallbackCursorColor);
+            return TryLoadGhosttyTheme()
+                ?? new TerminalTheme(
+                    AnsiPalette.BuildDefaultPalette(),
+                    AnsiPalette.FallbackDefaultForeground,
+                    AnsiPalette.FallbackDefaultBackground,
+                    AnsiPalette.FallbackCursorColor);
         }
 
         static string BuildSignature()
         {
-            return "default-theme";
+            var configPath = GetGhosttyConfigPath();
+            if (string.IsNullOrEmpty(configPath))
+            {
+                return "default-theme";
+            }
+
+            var configStamp = GetFileStamp(configPath);
+            var themeName = TryReadThemeName(configPath);
+            if (string.IsNullOrEmpty(themeName))
+            {
+                return $"{configPath}|{configStamp}";
+            }
+
+            var themePath = ResolveGhosttyThemePath(themeName);
+            if (string.IsNullOrEmpty(themePath))
+            {
+                return $"{configPath}|{configStamp}|{themeName}";
+            }
+
+            return $"{configPath}|{configStamp}|{themePath}|{GetFileStamp(themePath)}";
         }
 
         static TerminalTheme TryLoadGhosttyTheme()
@@ -150,6 +174,50 @@ namespace Linalab.Terminal.Editor
             }
 
             return string.Empty;
+        }
+
+        static string TryReadThemeName(string configPath)
+        {
+            if (string.IsNullOrEmpty(configPath) || !File.Exists(configPath))
+            {
+                return string.Empty;
+            }
+
+            var lines = File.ReadAllLines(configPath);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i].Trim();
+                if (string.IsNullOrEmpty(line) || line.StartsWith("#", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var separatorIndex = line.IndexOf('=');
+                if (separatorIndex <= 0)
+                {
+                    continue;
+                }
+
+                var key = line.Substring(0, separatorIndex).Trim();
+                if (!string.Equals(key, "theme", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                return line.Substring(separatorIndex + 1).Trim().Trim('"', '\'');
+            }
+
+            return string.Empty;
+        }
+
+        static string GetFileStamp(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return string.Empty;
+            }
+
+            return File.GetLastWriteTimeUtc(path).Ticks.ToString(CultureInfo.InvariantCulture);
         }
 
         static void ParseGhosttyConfigFile(string path, GhosttyThemeData data, bool parseThemeDirective)

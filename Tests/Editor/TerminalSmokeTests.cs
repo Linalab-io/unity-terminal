@@ -269,34 +269,53 @@ namespace Linalab.Terminal.Editor.Tests
         }
 
         [Test]
-        public void TerminalInputHandler_BuildsImageDropInput_FromRelativePath()
+        public void TerminalInputHandler_BuildsDropInput_FromRelativePath()
         {
-            var input = TerminalInputHandler.BuildImageDropInput("/Users/me/project", "Assets/Images/prompt.png");
+            var input = TerminalInputHandler.BuildDropInput("/Users/me/project", "Assets/Images/prompt.png");
             Assert.That(input, Is.EqualTo("@Assets/Images/prompt.png"));
         }
 
         [Test]
-        public void TerminalInputHandler_BuildsImageDropInput_FromProjectAbsolutePath()
+        public void TerminalInputHandler_BuildsDropInput_FromProjectAbsolutePath()
         {
-            var input = TerminalInputHandler.BuildImageDropInput("/Users/me/project", "/Users/me/project/Assets/Images/prompt.png");
+            var input = TerminalInputHandler.BuildDropInput("/Users/me/project", "/Users/me/project/Assets/Images/prompt.png");
             Assert.That(input, Is.EqualTo("@Assets/Images/prompt.png"));
         }
 
         [Test]
-        public void TerminalInputHandler_BuildsImageDropInput_FromExternalAbsolutePath()
+        public void TerminalInputHandler_BuildsDropInput_FromExternalAbsolutePath()
         {
-            var input = TerminalInputHandler.BuildImageDropInput("/Users/me/project", "/tmp/prompt.png");
+            var input = TerminalInputHandler.BuildDropInput("/Users/me/project", "/tmp/prompt.png");
             Assert.That(input, Is.EqualTo("@/tmp/prompt.png"));
         }
 
-        [TestCase("Assets/Images/prompt.png", true)]
-        [TestCase("Assets/Images/prompt.JPG", true)]
-        [TestCase("Assets/Docs/readme.md", false)]
-        [TestCase("", false)]
-        [TestCase(null, false)]
-        public void TerminalInputHandler_RecognizesSupportedImagePaths(string path, bool expected)
+        [Test]
+        public void TerminalInputHandler_BuildsDropInput_FromMultiplePaths()
         {
-            Assert.That(TerminalInputHandler.IsSupportedImagePath(path), Is.EqualTo(expected));
+            var input = TerminalInputHandler.BuildDropInput(
+                "/Users/me/project",
+                new[]
+                {
+                    "Assets/Images/prompt.png",
+                    "/Users/me/project/Assets/Folder",
+                    "/tmp/reference.txt"
+                });
+
+            Assert.That(input, Is.EqualTo("@Assets/Images/prompt.png @Assets/Folder @/tmp/reference.txt"));
+        }
+
+        [Test]
+        public void TerminalInputHandler_BuildsDropInput_FromFolderPath()
+        {
+            var input = TerminalInputHandler.BuildDropInput("/Users/me/project", "Assets/Folder");
+            Assert.That(input, Is.EqualTo("@Assets/Folder"));
+        }
+
+        [Test]
+        public void TerminalInputHandler_BuildsDropInput_SkipsBlankEntries()
+        {
+            var input = TerminalInputHandler.BuildDropInput("/Users/me/project", new[] { "", null, "Assets/Images/prompt.png" });
+            Assert.That(input, Is.EqualTo("@Assets/Images/prompt.png"));
         }
 
         [TestCase("Paste", true)]

@@ -8,6 +8,8 @@ namespace Linalab.Terminal.Editor
 {
     sealed class TerminalSurfaceElement : IMGUIContainer
     {
+        const string CellMetricProbeCharacters = "MW@#%&_gjy|/\\[]{}()한あ中█\uE0B0\uE0B1\uE0A0";
+
         readonly ITerminalBuffer _buffer;
         AnsiParser _parser;
 
@@ -38,7 +40,7 @@ namespace Linalab.Terminal.Editor
         public event System.Action OnGridSizeChanged;
         public event System.Action<Event> OnInputRequested;
         public event System.Action<string> OnMouseInputRequested;
-        public event System.Action<string> OnImageDropRequested;
+        public event System.Action<IReadOnlyList<string>> OnDropRequested;
         public event System.Action OnInteractionStarted;
 
         public TerminalSurfaceElement(ITerminalBuffer buffer, AnsiParser parser)
@@ -82,7 +84,7 @@ namespace Linalab.Terminal.Editor
 
         void OnDragUpdated(DragUpdatedEvent evt)
         {
-            if (evt == null || !TryGetDroppedImagePath(out _))
+            if (evt == null || !TryGetDroppedPaths(out _))
             {
                 return;
             }
@@ -93,7 +95,7 @@ namespace Linalab.Terminal.Editor
 
         void OnDragPerform(DragPerformEvent evt)
         {
-            if (evt == null || !TryGetDroppedImagePath(out var imagePath))
+            if (evt == null || !TryGetDroppedPaths(out var droppedPaths))
             {
                 return;
             }
@@ -102,7 +104,7 @@ namespace Linalab.Terminal.Editor
             DragAndDrop.AcceptDrag();
             OnInteractionStarted?.Invoke();
             Focus();
-            OnImageDropRequested?.Invoke(imagePath);
+            OnDropRequested?.Invoke(droppedPaths);
             evt.StopImmediatePropagation();
         }
 
@@ -447,11 +449,11 @@ namespace Linalab.Terminal.Editor
             }
         }
 
-        static bool TryGetDroppedImagePath(out string imagePath)
+        static bool TryGetDroppedPaths(out IReadOnlyList<string> droppedPaths)
         {
-            imagePath = null;
+            droppedPaths = null;
 
-            if (TryGetFirstSupportedImagePath(DragAndDrop.paths, out imagePath))
+            if (TryGetDroppedPaths(DragAndDrop.paths, out droppedPaths))
             {
                 return true;
             }
@@ -461,42 +463,54 @@ namespace Linalab.Terminal.Editor
                 return false;
             }
 
+            var collectedPaths = new List<string>();
             foreach (var draggedObject in DragAndDrop.objectReferences)
             {
                 var candidatePath = AssetDatabase.GetAssetPath(draggedObject);
-                if (!TerminalInputHandler.IsSupportedImagePath(candidatePath))
+                if (string.IsNullOrWhiteSpace(candidatePath))
                 {
                     continue;
                 }
 
-                imagePath = candidatePath;
-                return true;
+                collectedPaths.Add(candidatePath);
             }
 
-            return false;
+            if (collectedPaths.Count == 0)
+            {
+                return false;
+            }
+
+            droppedPaths = collectedPaths;
+            return true;
         }
 
-        static bool TryGetFirstSupportedImagePath(IReadOnlyList<string> paths, out string imagePath)
+        static bool TryGetDroppedPaths(IReadOnlyList<string> paths, out IReadOnlyList<string> droppedPaths)
         {
-            imagePath = null;
+            droppedPaths = null;
             if (paths == null)
             {
                 return false;
             }
 
+            var collectedPaths = new List<string>();
             for (var i = 0; i < paths.Count; i++)
             {
                 var candidatePath = paths[i];
-                if (!TerminalInputHandler.IsSupportedImagePath(candidatePath))
+                if (string.IsNullOrWhiteSpace(candidatePath))
                 {
                     continue;
                 }
 
-                imagePath = candidatePath;
-                return true;
+                collectedPaths.Add(candidatePath);
             }
 
-            return false;
+            if (collectedPaths.Count == 0)
+            {
+                return false;
+            }
+
+            droppedPaths = collectedPaths;
+            return true;
         }
 
         bool TryTranslateMouseButtonEvent(Event evt, bool isRelease, bool isMotion, out string sequence)
@@ -600,7 +614,7 @@ namespace Linalab.Terminal.Editor
             {
                 font = font,
                 fontSize = TerminalSettings.FontSize,
-                alignment = TextAnchor.UpperLeft,
+                alignment = TextAnchor.MiddleLeft,
                 padding = new RectOffset(0, 0, 0, 0),
                 margin = new RectOffset(0, 0, 0, 0),
                 border = new RectOffset(0, 0, 0, 0),
@@ -619,12 +633,29 @@ namespace Linalab.Terminal.Editor
             _italicCellStyle = CreateVariantStyle(_cellStyle, FontStyle.Italic);
             _boldItalicCellStyle = CreateVariantStyle(_cellStyle, FontStyle.BoldAndItalic);
 
-            const int widthProbeLength = 16;
-            var widthProbe = new GUIContent(new string('M', widthProbeLength));
-            float measuredWidth = _cellStyle.CalcSize(widthProbe).x / widthProbeLength;
-            float measuredHeight = Mathf.Max(_cellStyle.lineHeight, _cellStyle.CalcSize(new GUIContent("M")).y);
-            _cellWidth = Mathf.Max(1f, measuredWidth);
-            _cellHeight = Mathf.Max(1f, measuredHeight);
+            MeasureCellMetrics(_cellStyle, out _cellWidth, out _cellHeight);
+        }
+
+        static void MeasureCellMetrics(GUIStyle style, out float cellWidth, out float cellHeight)
+        {
+            float maxNormalizedWidth = 0f;
+            float maxHeight = Mathf.Max(1f, style.lineHeight);
+
+            for (int i = 0; i < CellMetricProbeCharacters.Length; i++)
+            {
+                char probeCharacter = CellMetricProbeCharacters[i];
+                var probeContent = new GUIContent(probeCharacter.ToString());
+                Vector2 probeSize = style.CalcSize(probeContent);
+                int displayWidth = Mathf.Max(1, GetDisplayWidth(probeCharacter));
+                maxNormalizedWidth = Mathf.Max(maxNormalizedWidth, probeSize.x / displayWidth);
+                maxHeight = Mathf.Max(maxHeight, probeSize.y);
+            }
+
+            float pixelsPerPoint = Mathf.Max(1f, EditorGUIUtility.pixelsPerPoint);
+            float horizontalPadding = 1f / pixelsPerPoint;
+            float verticalPadding = 2f / pixelsPerPoint;
+            cellWidth = Mathf.Max(1f, SnapToPixel(maxNormalizedWidth + horizontalPadding));
+            cellHeight = Mathf.Max(1f, SnapToPixel(maxHeight + verticalPadding));
         }
 
         void DrawRow(int row, int cols, TerminalTheme theme, Color defaultBackground, GridLayout layout)

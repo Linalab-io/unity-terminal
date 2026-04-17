@@ -229,7 +229,7 @@ namespace Linalab.Terminal.Editor
             _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
             _terminalSurface.OnInputRequested += HandleKeyInput;
             _terminalSurface.OnMouseInputRequested += HandleMouseInput;
-            _terminalSurface.OnImageDropRequested += HandleImageDropInput;
+            _terminalSurface.OnDropRequested += HandleDropInput;
             _terminalSurface.OnInteractionStarted += OnSurfaceInteractionStarted;
             _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
             _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
@@ -878,15 +878,15 @@ namespace Linalab.Terminal.Editor
             WriteUserInputToShell(sequence, "surface-mouse");
         }
 
-        void HandleImageDropInput(string path)
+        void HandleDropInput(System.Collections.Generic.IReadOnlyList<string> paths)
         {
-            var input = TerminalInputHandler.BuildImageDropInput(TerminalSettings.GetProjectRootDirectory(), path);
+            var input = TerminalInputHandler.BuildDropInput(TerminalSettings.GetProjectRootDirectory(), paths);
             if (string.IsNullOrEmpty(input))
             {
                 return;
             }
 
-            WriteUserInputToShell(input, "surface-image-drop");
+            WriteUserInputToShell(input, "surface-drop");
             _terminalSurface?.ScrollToBottom();
         }
 
@@ -1257,7 +1257,7 @@ namespace Linalab.Terminal.Editor
                 _terminalSurface.OnGridSizeChanged -= OnGridSizeChanged;
                 _terminalSurface.OnInputRequested -= HandleKeyInput;
                 _terminalSurface.OnMouseInputRequested -= HandleMouseInput;
-                _terminalSurface.OnImageDropRequested -= HandleImageDropInput;
+                _terminalSurface.OnDropRequested -= HandleDropInput;
                 _terminalSurface.OnInteractionStarted -= OnSurfaceInteractionStarted;
                 _terminalSurface.UnregisterCallback<FocusInEvent>(OnSurfaceFocusIn);
                 _terminalSurface.UnregisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
