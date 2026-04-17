@@ -229,6 +229,7 @@ namespace Linalab.Terminal.Editor
             _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
             _terminalSurface.OnInputRequested += HandleKeyInput;
             _terminalSurface.OnMouseInputRequested += HandleMouseInput;
+            _terminalSurface.OnImageDropRequested += HandleImageDropInput;
             _terminalSurface.OnInteractionStarted += OnSurfaceInteractionStarted;
             _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
             _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
@@ -877,6 +878,18 @@ namespace Linalab.Terminal.Editor
             WriteUserInputToShell(sequence, "surface-mouse");
         }
 
+        void HandleImageDropInput(string path)
+        {
+            var input = TerminalInputHandler.BuildImageDropInput(TerminalSettings.GetProjectRootDirectory(), path);
+            if (string.IsNullOrEmpty(input))
+            {
+                return;
+            }
+
+            WriteUserInputToShell(input, "surface-image-drop");
+            _terminalSurface?.ScrollToBottom();
+        }
+
         void WriteUserInputToShell(string text, string source)
         {
             if (string.IsNullOrEmpty(text))
@@ -1243,6 +1256,8 @@ namespace Linalab.Terminal.Editor
             {
                 _terminalSurface.OnGridSizeChanged -= OnGridSizeChanged;
                 _terminalSurface.OnInputRequested -= HandleKeyInput;
+                _terminalSurface.OnMouseInputRequested -= HandleMouseInput;
+                _terminalSurface.OnImageDropRequested -= HandleImageDropInput;
                 _terminalSurface.OnInteractionStarted -= OnSurfaceInteractionStarted;
                 _terminalSurface.UnregisterCallback<FocusInEvent>(OnSurfaceFocusIn);
                 _terminalSurface.UnregisterCallback<FocusOutEvent>(OnSurfaceFocusOut);

@@ -38,6 +38,7 @@ namespace Linalab.Terminal.Editor
         public event System.Action OnGridSizeChanged;
         public event System.Action<Event> OnInputRequested;
         public event System.Action<string> OnMouseInputRequested;
+        public event System.Action<string> OnImageDropRequested;
         public event System.Action OnInteractionStarted;
 
         public TerminalSurfaceElement(ITerminalBuffer buffer, AnsiParser parser)
@@ -59,6 +60,8 @@ namespace Linalab.Terminal.Editor
             style.overflow = Overflow.Hidden;
             RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
             RegisterCallback<MouseDownEvent>(OnMouseDownEvent);
+            RegisterCallback<DragUpdatedEvent>(OnDragUpdated);
+            RegisterCallback<DragPerformEvent>(OnDragPerform);
         }
 
         public void SetMouseProtocolSource(AnsiParser parser)
@@ -75,6 +78,32 @@ namespace Linalab.Terminal.Editor
 
             OnInteractionStarted?.Invoke();
             Focus();
+        }
+
+        void OnDragUpdated(DragUpdatedEvent evt)
+        {
+            if (evt == null || !TryGetDroppedImagePath(out _))
+            {
+                return;
+            }
+
+            DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+            evt.StopImmediatePropagation();
+        }
+
+        void OnDragPerform(DragPerformEvent evt)
+        {
+            if (evt == null || !TryGetDroppedImagePath(out var imagePath))
+            {
+                return;
+            }
+
+            DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+            DragAndDrop.AcceptDrag();
+            OnInteractionStarted?.Invoke();
+            Focus();
+            OnImageDropRequested?.Invoke(imagePath);
+            evt.StopImmediatePropagation();
         }
 
         void OnGeometryChanged(GeometryChangedEvent evt)
@@ -416,6 +445,58 @@ namespace Linalab.Terminal.Editor
                 default:
                     return false;
             }
+        }
+
+        static bool TryGetDroppedImagePath(out string imagePath)
+        {
+            imagePath = null;
+
+            if (TryGetFirstSupportedImagePath(DragAndDrop.paths, out imagePath))
+            {
+                return true;
+            }
+
+            if (DragAndDrop.objectReferences == null)
+            {
+                return false;
+            }
+
+            foreach (var draggedObject in DragAndDrop.objectReferences)
+            {
+                var candidatePath = AssetDatabase.GetAssetPath(draggedObject);
+                if (!TerminalInputHandler.IsSupportedImagePath(candidatePath))
+                {
+                    continue;
+                }
+
+                imagePath = candidatePath;
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool TryGetFirstSupportedImagePath(IReadOnlyList<string> paths, out string imagePath)
+        {
+            imagePath = null;
+            if (paths == null)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < paths.Count; i++)
+            {
+                var candidatePath = paths[i];
+                if (!TerminalInputHandler.IsSupportedImagePath(candidatePath))
+                {
+                    continue;
+                }
+
+                imagePath = candidatePath;
+                return true;
+            }
+
+            return false;
         }
 
         bool TryTranslateMouseButtonEvent(Event evt, bool isRelease, bool isMotion, out string sequence)

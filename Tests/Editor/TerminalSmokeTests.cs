@@ -268,6 +268,37 @@ namespace Linalab.Terminal.Editor.Tests
             Assert.That(TerminalInputHandler.IsPrimaryPasteShortcut(platform, keyCode, command, control), Is.EqualTo(expected));
         }
 
+        [Test]
+        public void TerminalInputHandler_BuildsImageDropInput_FromRelativePath()
+        {
+            var input = TerminalInputHandler.BuildImageDropInput("/Users/me/project", "Assets/Images/prompt.png");
+            Assert.That(input, Is.EqualTo("@Assets/Images/prompt.png"));
+        }
+
+        [Test]
+        public void TerminalInputHandler_BuildsImageDropInput_FromProjectAbsolutePath()
+        {
+            var input = TerminalInputHandler.BuildImageDropInput("/Users/me/project", "/Users/me/project/Assets/Images/prompt.png");
+            Assert.That(input, Is.EqualTo("@Assets/Images/prompt.png"));
+        }
+
+        [Test]
+        public void TerminalInputHandler_BuildsImageDropInput_FromExternalAbsolutePath()
+        {
+            var input = TerminalInputHandler.BuildImageDropInput("/Users/me/project", "/tmp/prompt.png");
+            Assert.That(input, Is.EqualTo("@/tmp/prompt.png"));
+        }
+
+        [TestCase("Assets/Images/prompt.png", true)]
+        [TestCase("Assets/Images/prompt.JPG", true)]
+        [TestCase("Assets/Docs/readme.md", false)]
+        [TestCase("", false)]
+        [TestCase(null, false)]
+        public void TerminalInputHandler_RecognizesSupportedImagePaths(string path, bool expected)
+        {
+            Assert.That(TerminalInputHandler.IsSupportedImagePath(path), Is.EqualTo(expected));
+        }
+
         [TestCase("Paste", true)]
         [TestCase("Copy", false)]
         [TestCase(null, false)]

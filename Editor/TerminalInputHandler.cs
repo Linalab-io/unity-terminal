@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -21,9 +23,64 @@ namespace Linalab.Terminal.Editor
 
     public static class TerminalInputHandler
     {
+        static readonly string[] SupportedImageExtensions =
+        {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".tga",
+            ".tif",
+            ".tiff",
+            ".psd",
+            ".exr",
+            ".hdr"
+        };
+
         public static string TranslateKeyEvent(Event evt)
         {
             return TranslateKeyEvent(evt, Input.compositionString);
+        }
+
+        public static string BuildImageDropInput(string projectRootDirectory, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            var normalizedPath = NormalizeAttachmentPath(projectRootDirectory, path);
+            if (string.IsNullOrWhiteSpace(normalizedPath))
+            {
+                return null;
+            }
+
+            return $"@{normalizedPath}";
+        }
+
+        public static bool IsSupportedImagePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var extension = Path.GetExtension(path);
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                return false;
+            }
+
+            foreach (var candidate in SupportedImageExtensions)
+            {
+                if (string.Equals(extension, candidate, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public static string TranslateKeyEvent(char character, KeyCode keyCode, bool control, bool shift, string composition)
@@ -347,6 +404,44 @@ namespace Linalab.Terminal.Editor
                 ((char)(code + 32)).ToString(),
                 ((char)(x + 32)).ToString(),
                 ((char)(y + 32)).ToString());
+        }
+
+        static string NormalizeAttachmentPath(string projectRootDirectory, string path)
+        {
+            var normalizedPath = NormalizePath(path);
+            if (string.IsNullOrWhiteSpace(normalizedPath))
+            {
+                return string.Empty;
+            }
+
+            var normalizedProjectRoot = NormalizePath(projectRootDirectory);
+            if (string.IsNullOrWhiteSpace(normalizedProjectRoot))
+            {
+                return normalizedPath;
+            }
+
+            if (string.Equals(normalizedPath, normalizedProjectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return ".";
+            }
+
+            var projectRootWithSlash = normalizedProjectRoot + "/";
+            if (normalizedPath.StartsWith(projectRootWithSlash, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalizedPath.Substring(projectRootWithSlash.Length);
+            }
+
+            return normalizedPath;
+        }
+
+        static string NormalizePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            return path.Trim().Replace('\\', '/');
         }
     }
 }
