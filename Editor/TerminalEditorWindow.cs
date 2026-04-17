@@ -8,6 +8,7 @@ namespace Linalab.Terminal.Editor
     public sealed class TerminalEditorWindow : EditorWindow
     {
         const string MenuPath = "Tools/Unity Editor Terminal";
+        const string VerboseLoggingMenuPath = MenuPath + "/Verbose Logging";
         const int DefaultRows = 24;
         const int DefaultCols = 80;
         const int MinimumUsableRows = 2;
@@ -57,6 +58,20 @@ namespace Linalab.Terminal.Editor
             window.wantsMouseMove = true;
             window.Show();
         }
+        [MenuItem(VerboseLoggingMenuPath)]
+        static void ToggleVerboseLogging()
+        {
+            bool enabled = TerminalSettings.ToggleVerboseLogging();
+            Menu.SetChecked(VerboseLoggingMenuPath, enabled);
+        }
+
+        [MenuItem(VerboseLoggingMenuPath, true)]
+        static bool ValidateVerboseLoggingMenu()
+        {
+            Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
+            return true;
+        }
+
 
         void CreateGUI()
         {
@@ -292,6 +307,7 @@ namespace Linalab.Terminal.Editor
         {
             Cleanup();
         }
+            Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
 
         void OnSurfaceFocusIn(FocusInEvent evt)
         {
