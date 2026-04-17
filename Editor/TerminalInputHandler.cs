@@ -7,6 +7,11 @@ namespace Linalab.Terminal.Editor
     {
         public static string TranslateKeyEvent(Event evt)
         {
+            return TranslateKeyEvent(evt, Input.compositionString);
+        }
+
+        public static string TranslateKeyEvent(Event evt, string composition)
+        {
             if (evt == null || evt.type != EventType.KeyDown)
             {
                 return null;
@@ -17,7 +22,7 @@ namespace Linalab.Terminal.Editor
                 return controlSequence;
             }
 
-            if (TryTranslateSpecialKey(evt, out var specialSequence))
+            if (TryTranslateSpecialKey(evt, composition, out var specialSequence))
             {
                 return specialSequence;
             }
@@ -32,21 +37,22 @@ namespace Linalab.Terminal.Editor
                 return functionSequence;
             }
 
-            return TryTranslatePrintableCharacter(evt, out var printableSequence) ? printableSequence : null;
+            return TryTranslatePrintableCharacter(evt, composition, out var printableSequence) ? printableSequence : null;
         }
 
         public static string GetPasteText() => EditorGUIUtility.systemCopyBuffer;
 
-        static bool TryTranslatePrintableCharacter(Event evt, out string translated)
+        static bool TryTranslatePrintableCharacter(Event evt, string composition, out string translated)
         {
+            if (ShouldSuppressAsciiDuringImeComposition(evt, composition))
+            {
+                translated = null;
+                return false;
+            }
+
             if (evt.character >= 0x20 && evt.character != 0x7f)
             {
                 translated = evt.character.ToString();
-                return true;
-            }
-
-            if (TryTranslatePrintableKeyCode(evt, out translated))
-            {
                 return true;
             }
 
@@ -54,61 +60,20 @@ namespace Linalab.Terminal.Editor
             return false;
         }
 
-        static bool TryTranslatePrintableKeyCode(Event evt, out string translated)
+        static bool ShouldSuppressAsciiDuringImeComposition(Event evt, string composition)
         {
-            translated = null;
-            if (evt == null || evt.command || evt.control || evt.alt)
+            if (evt == null)
             {
                 return false;
             }
 
-            if (evt.keyCode >= KeyCode.A && evt.keyCode <= KeyCode.Z)
+            if (string.IsNullOrEmpty(composition))
             {
-                char baseCharacter = (char)('a' + (evt.keyCode - KeyCode.A));
-                translated = (evt.shift ? char.ToUpperInvariant(baseCharacter) : baseCharacter).ToString();
-                return true;
+                return false;
             }
 
-            if (evt.keyCode >= KeyCode.Alpha0 && evt.keyCode <= KeyCode.Alpha9)
-            {
-                int index = evt.keyCode - KeyCode.Alpha0;
-                translated = evt.shift ? ShiftedNumberSymbols[index] : ((char)('0' + index)).ToString();
-                return true;
-            }
-
-            translated = evt.keyCode switch
-            {
-                KeyCode.Space => " ",
-                KeyCode.Minus => evt.shift ? "_" : "-",
-                KeyCode.Equals => evt.shift ? "+" : "=",
-                KeyCode.LeftBracket => evt.shift ? "{" : "[",
-                KeyCode.RightBracket => evt.shift ? "}" : "]",
-                KeyCode.Backslash => evt.shift ? "|" : "\\",
-                KeyCode.Semicolon => evt.shift ? ":" : ";",
-                KeyCode.Quote => evt.shift ? "\"" : "'",
-                KeyCode.BackQuote => evt.shift ? "~" : "`",
-                KeyCode.Comma => evt.shift ? "<" : ",",
-                KeyCode.Period => evt.shift ? ">" : ".",
-                KeyCode.Slash => evt.shift ? "?" : "/",
-                _ => null
-            };
-
-            return translated != null;
+            return evt.character is >= (char)0x20 and <= (char)0x7e;
         }
-
-        static readonly string[] ShiftedNumberSymbols =
-        {
-            ")",
-            "!",
-            "@",
-            "#",
-            "$",
-            "%",
-            "^",
-            "&",
-            "*",
-            "("
-        };
 
         static bool TryTranslateControlLetter(Event evt, out string translated)
         {
@@ -140,8 +105,15 @@ namespace Linalab.Terminal.Editor
             return translated != null;
         }
 
-        static bool TryTranslateSpecialKey(Event evt, out string translated)
+        static bool TryTranslateSpecialKey(Event evt, string composition, out string translated)
         {
+            if (!string.IsNullOrEmpty(composition)
+                && (evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter))
+            {
+                translated = null;
+                return false;
+            }
+
             translated = evt.keyCode switch
             {
                 KeyCode.Return or KeyCode.KeypadEnter => "\r",

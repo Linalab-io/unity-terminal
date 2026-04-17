@@ -22,7 +22,8 @@ namespace Linalab.Terminal.Editor
         ParserState _state;
         int _currentParameter;
         bool _hasCurrentParameter;
-        bool _privateMarker;
+        char _privateMarker;
+        bool _hasCsiIntermediate;
         bool _lastCharacterWasCarriageReturn;
 
         TerminalColor _foreground = TerminalColor.DefaultColor;
@@ -212,9 +213,12 @@ namespace Linalab.Terminal.Editor
 
         void HandleCsi(char character)
         {
-            if (character == '?')
+            if (!_hasCurrentParameter
+                && _parameters.Count == 0
+                && !_hasCsiIntermediate
+                && IsCsiPrivateMarker(character))
             {
-                _privateMarker = true;
+                _privateMarker = character;
                 return;
             }
 
@@ -231,6 +235,19 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
+            if (IsCsiIntermediate(character))
+            {
+                _hasCsiIntermediate = true;
+                return;
+            }
+
+            if (!IsCsiFinalByte(character))
+            {
+                _state = ParserState.Ground;
+                ResetParameters();
+                return;
+            }
+
             CommitParameter();
             DispatchCsi(character);
             _state = ParserState.Ground;
@@ -239,6 +256,11 @@ namespace Linalab.Terminal.Editor
 
         void DispatchCsi(char finalByte)
         {
+            if (_privateMarker != '\0' || _hasCsiIntermediate)
+            {
+                return;
+            }
+
             switch (finalByte)
             {
                 case 'A':
@@ -438,7 +460,7 @@ namespace Linalab.Terminal.Editor
 
         void DispatchDeviceStatusReport()
         {
-            if (_privateMarker || GetModeParameter(0, 0) != 6)
+            if (_privateMarker != '\0' || GetModeParameter(0, 0) != 6)
             {
                 return;
             }
@@ -543,7 +565,23 @@ namespace Linalab.Terminal.Editor
             _parameters.Clear();
             _currentParameter = 0;
             _hasCurrentParameter = false;
-            _privateMarker = false;
+            _privateMarker = '\0';
+            _hasCsiIntermediate = false;
+        }
+
+        static bool IsCsiPrivateMarker(char character)
+        {
+            return character is >= '<' and <= '?';
+        }
+
+        static bool IsCsiIntermediate(char character)
+        {
+            return character is >= ' ' and <= '/';
+        }
+
+        static bool IsCsiFinalByte(char character)
+        {
+            return character is >= '@' and <= '~';
         }
 
         int GetPositiveParameter(int index, int defaultValue)
