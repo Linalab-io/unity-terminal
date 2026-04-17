@@ -132,6 +132,48 @@ namespace Linalab.Terminal.Editor.Tests
             Assert.That(line, Does.Not.Contain("0 q"));
         }
 
+        [Test]
+        public void AnsiParser_TracksMouseReportingModes_AndEncoding()
+        {
+            var buffer = new TerminalBuffer(3, 40, 10);
+            var parser = new AnsiParser(buffer);
+
+            parser.Feed("\x1b[?1000h");
+            parser.Feed("\x1b[?1006h");
+            parser.Feed("\x1b[?1002h");
+            parser.Feed("\x1b[?1003h");
+
+            Assert.That(parser.MouseTrackingMode, Is.EqualTo(TerminalMouseTrackingMode.AnyMotion));
+            Assert.That(parser.MouseEncoding, Is.EqualTo(TerminalMouseEncoding.Sgr));
+            Assert.That(parser.IsMouseReportingEnabled, Is.True);
+
+            parser.Feed("\x1b[?1003l");
+            Assert.That(parser.MouseTrackingMode, Is.EqualTo(TerminalMouseTrackingMode.ButtonDrag));
+
+            parser.Feed("\x1b[?1002l");
+            Assert.That(parser.MouseTrackingMode, Is.EqualTo(TerminalMouseTrackingMode.ButtonPress));
+
+            parser.Feed("\x1b[?1000l");
+            parser.Feed("\x1b[?1006l");
+            Assert.That(parser.MouseTrackingMode, Is.EqualTo(TerminalMouseTrackingMode.None));
+            Assert.That(parser.MouseEncoding, Is.EqualTo(TerminalMouseEncoding.Default));
+            Assert.That(parser.IsMouseReportingEnabled, Is.False);
+        }
+
+        [Test]
+        public void AnsiParser_FullReset_ClearsMouseReportingState()
+        {
+            var buffer = new TerminalBuffer(3, 40, 10);
+            var parser = new AnsiParser(buffer);
+
+            parser.Feed("\x1b[?1000h");
+            parser.Feed("\x1b[?1006h");
+            parser.Feed("\x1b" + "c");
+
+            Assert.That(parser.MouseTrackingMode, Is.EqualTo(TerminalMouseTrackingMode.None));
+            Assert.That(parser.MouseEncoding, Is.EqualTo(TerminalMouseEncoding.Default));
+        }
+
         [TestCase('한')]
         [TestCase('あ')]
         [TestCase('中')]
@@ -214,6 +256,52 @@ namespace Linalab.Terminal.Editor.Tests
             };
 
             Assert.That(TerminalInputHandler.TranslateKeyEvent(evt, "한"), Is.Null);
+        }
+
+        [TestCase(RuntimePlatform.OSXEditor, KeyCode.V, true, false, true)]
+        [TestCase(RuntimePlatform.OSXEditor, KeyCode.V, false, true, false)]
+        [TestCase(RuntimePlatform.LinuxEditor, KeyCode.V, false, true, true)]
+        [TestCase(RuntimePlatform.WindowsEditor, KeyCode.V, false, true, true)]
+        [TestCase(RuntimePlatform.LinuxEditor, KeyCode.C, false, true, false)]
+        public void TerminalInputHandler_DetectsPrimaryPasteShortcut(RuntimePlatform platform, KeyCode keyCode, bool command, bool control, bool expected)
+        {
+            Assert.That(TerminalInputHandler.IsPrimaryPasteShortcut(platform, keyCode, command, control), Is.EqualTo(expected));
+        }
+
+        [TestCase("Paste", true)]
+        [TestCase("Copy", false)]
+        [TestCase(null, false)]
+        public void TerminalInputHandler_RecognizesPasteCommand(string commandName, bool expected)
+        {
+            Assert.That(TerminalInputHandler.IsPasteCommand(commandName), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void TerminalInputHandler_EncodesSgrMouseButtonEvents()
+        {
+            var cell = new Vector2Int(4, 1);
+
+            Assert.That(
+                TerminalInputHandler.TranslateMouseButtonEvent(TerminalMouseEncoding.Sgr, cell, 0, false, false, false, isRelease: false, isMotion: false),
+                Is.EqualTo("\x1b[<0;5;2M"));
+            Assert.That(
+                TerminalInputHandler.TranslateMouseButtonEvent(TerminalMouseEncoding.Sgr, cell, 0, false, false, false, isRelease: true, isMotion: false),
+                Is.EqualTo("\x1b[<0;5;2m"));
+            Assert.That(
+                TerminalInputHandler.TranslateMouseButtonEvent(TerminalMouseEncoding.Sgr, cell, 0, false, false, false, isRelease: false, isMotion: true),
+                Is.EqualTo("\x1b[<32;5;2M"));
+            Assert.That(
+                TerminalInputHandler.TranslateMouseScrollEvent(TerminalMouseEncoding.Sgr, cell, false, false, false, scrollUp: true),
+                Is.EqualTo("\x1b[<64;5;2M"));
+        }
+
+        [Test]
+        public void TerminalInputHandler_EncodesLegacyMouseRelease()
+        {
+            var cell = new Vector2Int(4, 1);
+            string encoded = TerminalInputHandler.TranslateMouseButtonEvent(TerminalMouseEncoding.Default, cell, 0, false, false, false, isRelease: true, isMotion: false);
+            string expected = string.Concat("\x1b[M", ((char)(3 + 32)).ToString(), ((char)(5 + 32)).ToString(), ((char)(2 + 32)).ToString());
+            Assert.That(encoded, Is.EqualTo(expected));
         }
 
         static void WriteText(TerminalBuffer buffer, string text)

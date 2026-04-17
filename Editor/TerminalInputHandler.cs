@@ -3,6 +3,22 @@ using UnityEngine;
 
 namespace Linalab.Terminal.Editor
 {
+    public enum TerminalMouseTrackingMode
+    {
+        None,
+        ButtonPress,
+        ButtonDrag,
+        AnyMotion
+    }
+
+    public enum TerminalMouseEncoding
+    {
+        Default,
+        Utf8,
+        Sgr,
+        Urxvt
+    }
+
     public static class TerminalInputHandler
     {
         public static string TranslateKeyEvent(Event evt)
@@ -46,6 +62,89 @@ namespace Linalab.Terminal.Editor
         }
 
         public static string GetPasteText() => EditorGUIUtility.systemCopyBuffer;
+
+        public static bool IsPrimaryPasteShortcut(RuntimePlatform platform, KeyCode keyCode, bool command, bool control)
+        {
+            bool isPrimaryModifier = platform == RuntimePlatform.OSXEditor ? command : control;
+            return isPrimaryModifier && keyCode == KeyCode.V;
+        }
+
+        public static bool IsPasteCommand(string commandName)
+        {
+            return string.Equals(commandName, "Paste", System.StringComparison.Ordinal);
+        }
+
+        public static string TranslateMouseButtonEvent(
+            TerminalMouseEncoding encoding,
+            Vector2Int cell,
+            int button,
+            bool shift,
+            bool alt,
+            bool control,
+            bool isRelease,
+            bool isMotion)
+        {
+            if (button is < 0 or > 2)
+            {
+                return null;
+            }
+
+            int modifierMask = GetMouseModifierMask(shift, alt, control);
+            if (encoding == TerminalMouseEncoding.Sgr)
+            {
+                int code = button + modifierMask;
+                if (isMotion)
+                {
+                    code += 32;
+                }
+
+                char suffix = isRelease ? 'm' : 'M';
+                return $"\x1b[<{code};{cell.x + 1};{cell.y + 1}{suffix}";
+            }
+
+            int legacyCode = isRelease ? 3 + modifierMask : button + modifierMask;
+            if (isMotion)
+            {
+                legacyCode = button + modifierMask + 32;
+            }
+
+            return BuildLegacyMouseSequence(legacyCode, cell);
+        }
+
+        public static string TranslateMouseMoveEvent(
+            TerminalMouseEncoding encoding,
+            Vector2Int cell,
+            bool shift,
+            bool alt,
+            bool control)
+        {
+            int modifierMask = GetMouseModifierMask(shift, alt, control);
+            int code = 35 + modifierMask;
+            if (encoding == TerminalMouseEncoding.Sgr)
+            {
+                return $"\x1b[<{code};{cell.x + 1};{cell.y + 1}M";
+            }
+
+            return BuildLegacyMouseSequence(code, cell);
+        }
+
+        public static string TranslateMouseScrollEvent(
+            TerminalMouseEncoding encoding,
+            Vector2Int cell,
+            bool shift,
+            bool alt,
+            bool control,
+            bool scrollUp)
+        {
+            int modifierMask = GetMouseModifierMask(shift, alt, control);
+            int code = (scrollUp ? 64 : 65) + modifierMask;
+            if (encoding == TerminalMouseEncoding.Sgr)
+            {
+                return $"\x1b[<{code};{cell.x + 1};{cell.y + 1}M";
+            }
+
+            return BuildLegacyMouseSequence(code, cell);
+        }
 
         static bool TryTranslatePrintableCharacter(Event evt, string composition, out string translated)
         {
@@ -211,6 +310,43 @@ namespace Linalab.Terminal.Editor
             };
 
             return translated != null;
+        }
+
+        static int GetMouseModifierMask(bool shift, bool alt, bool control)
+        {
+            int modifierMask = 0;
+            if (shift)
+            {
+                modifierMask |= 4;
+            }
+
+            if (alt)
+            {
+                modifierMask |= 8;
+            }
+
+            if (control)
+            {
+                modifierMask |= 16;
+            }
+
+            return modifierMask;
+        }
+
+        static string BuildLegacyMouseSequence(int code, Vector2Int cell)
+        {
+            int x = cell.x + 1;
+            int y = cell.y + 1;
+            if (x > 223 || y > 223)
+            {
+                return null;
+            }
+
+            return string.Concat(
+                "\x1b[M",
+                ((char)(code + 32)).ToString(),
+                ((char)(x + 32)).ToString(),
+                ((char)(y + 32)).ToString());
         }
     }
 }

@@ -29,6 +29,35 @@ namespace Linalab.Terminal.Editor
         TerminalColor _foreground = TerminalColor.DefaultColor;
         TerminalColor _background = TerminalColor.DefaultColor;
         CellFlags _flags = CellFlags.None;
+        bool _mouseTrackingPress;
+        bool _mouseTrackingDrag;
+        bool _mouseTrackingAnyMotion;
+
+        public TerminalMouseTrackingMode MouseTrackingMode
+        {
+            get
+            {
+                if (_mouseTrackingAnyMotion)
+                {
+                    return TerminalMouseTrackingMode.AnyMotion;
+                }
+
+                if (_mouseTrackingDrag)
+                {
+                    return TerminalMouseTrackingMode.ButtonDrag;
+                }
+
+                if (_mouseTrackingPress)
+                {
+                    return TerminalMouseTrackingMode.ButtonPress;
+                }
+
+                return TerminalMouseTrackingMode.None;
+            }
+        }
+
+        public TerminalMouseEncoding MouseEncoding { get; private set; }
+        public bool IsMouseReportingEnabled => MouseTrackingMode != TerminalMouseTrackingMode.None;
 
         public AnsiParser(ITerminalBuffer buffer)
         {
@@ -256,8 +285,14 @@ namespace Linalab.Terminal.Editor
 
         void DispatchCsi(char finalByte)
         {
-            if (_privateMarker != '\0' || _hasCsiIntermediate)
+            if (_hasCsiIntermediate)
             {
+                return;
+            }
+
+            if (_privateMarker != '\0')
+            {
+                DispatchPrivateCsi(finalByte);
                 return;
             }
 
@@ -309,9 +344,57 @@ namespace Linalab.Terminal.Editor
                 case 'n':
                     DispatchDeviceStatusReport();
                     break;
-                case 'h':
-                case 'l':
-                    break;
+            }
+        }
+
+        void DispatchPrivateCsi(char finalByte)
+        {
+            if (_privateMarker != '?')
+            {
+                return;
+            }
+
+            bool? enabled = finalByte switch
+            {
+                'h' => true,
+                'l' => false,
+                _ => null
+            };
+
+            if (!enabled.HasValue)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _parameters.Count; i++)
+            {
+                int parameter = GetModeParameter(i, -1);
+                switch (parameter)
+                {
+                    case 1000:
+                        _mouseTrackingPress = enabled.Value;
+                        break;
+                    case 1002:
+                        _mouseTrackingDrag = enabled.Value;
+                        break;
+                    case 1003:
+                        _mouseTrackingAnyMotion = enabled.Value;
+                        break;
+                    case 1005:
+                        break;
+                    case 1006:
+                        if (enabled.Value)
+                        {
+                            MouseEncoding = TerminalMouseEncoding.Sgr;
+                        }
+                        else if (MouseEncoding == TerminalMouseEncoding.Sgr)
+                        {
+                            MouseEncoding = TerminalMouseEncoding.Default;
+                        }
+                        break;
+                    case 1015:
+                        break;
+                }
             }
         }
 
@@ -541,6 +624,7 @@ namespace Linalab.Terminal.Editor
         {
             _buffer.Reset();
             ResetPen();
+            ResetMouseState();
             _buffer.SetAttribute(_foreground, _background, _flags);
             _state = ParserState.Ground;
             ResetParameters();
@@ -567,6 +651,14 @@ namespace Linalab.Terminal.Editor
             _hasCurrentParameter = false;
             _privateMarker = '\0';
             _hasCsiIntermediate = false;
+        }
+
+        void ResetMouseState()
+        {
+            _mouseTrackingPress = false;
+            _mouseTrackingDrag = false;
+            _mouseTrackingAnyMotion = false;
+            MouseEncoding = TerminalMouseEncoding.Default;
         }
 
         static bool IsCsiPrivateMarker(char character)
