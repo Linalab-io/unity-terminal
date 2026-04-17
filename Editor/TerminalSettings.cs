@@ -24,6 +24,7 @@ namespace Linalab.Terminal.Editor
         const string CursorBlinkRateKey = Prefix + "CursorBlinkRate";
         const string VerboseLoggingKey = Prefix + "VerboseLogging";
         const string TmuxAutoAttachKey = Prefix + "TmuxAutoAttach";
+        const string TmuxSessionNameOverrideKey = Prefix + "TmuxSessionNameOverride";
 
         public static int FontSize
         {
@@ -107,9 +108,26 @@ namespace Linalab.Terminal.Editor
             return TmuxAutoAttach;
         }
 
-        public static string GetTmuxSessionName()
+        public static string TmuxSessionNameOverride
+        {
+            get => EditorPrefs.GetString(TmuxSessionNameOverrideKey, string.Empty);
+            set => EditorPrefs.SetString(TmuxSessionNameOverrideKey, value ?? string.Empty);
+        }
+
+        public static string GetCanonicalTmuxSessionName()
         {
             return BuildTmuxSessionName(GetProjectRootDirectory());
+        }
+
+        public static string GetTmuxSessionName()
+        {
+            var overrideName = TmuxSessionNameOverride;
+            if (!string.IsNullOrWhiteSpace(overrideName))
+            {
+                return overrideName;
+            }
+
+            return GetCanonicalTmuxSessionName();
         }
 
         public static string BuildTmuxSessionName(string projectRoot)
@@ -123,13 +141,7 @@ namespace Linalab.Terminal.Editor
                 : new DirectoryInfo(normalized).Name;
 
             string sanitized = SanitizeTmuxSessionName(directoryName);
-            string hash = ComputeStableWorkspaceHash(normalized);
-            if (string.IsNullOrEmpty(sanitized))
-            {
-                return "unity-terminal-" + hash;
-            }
-
-            return sanitized + "-" + hash;
+            return string.IsNullOrEmpty(sanitized) ? "unity-terminal" : sanitized;
         }
 
         static string SanitizeTmuxSessionName(string name)
@@ -153,24 +165,6 @@ namespace Linalab.Terminal.Editor
             }
 
             return builder.ToString();
-        }
-
-        static string ComputeStableWorkspaceHash(string input)
-        {
-            if (string.IsNullOrEmpty(input))
-            {
-                return "0";
-            }
-
-            ulong hash = 14695981039346656037UL;
-            const ulong prime = 1099511628211UL;
-            foreach (char c in input)
-            {
-                hash ^= c;
-                hash *= prime;
-            }
-
-            return (hash & 0x7FFFFFFFUL).ToString("x8", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         public static string ResolveShellPath()

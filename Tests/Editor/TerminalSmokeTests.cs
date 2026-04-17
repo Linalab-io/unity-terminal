@@ -360,7 +360,7 @@ namespace Linalab.Terminal.Editor.Tests
             string differentRoot = TerminalSettings.BuildTmuxSessionName("/Users/me/projects/OtherGame");
 
             Assert.That(first, Is.EqualTo(second), "session name should be deterministic");
-            Assert.That(first, Does.StartWith("MyGame-"));
+            Assert.That(first, Is.EqualTo("MyGame"));
             Assert.That(first, Does.Not.Contain("."));
             Assert.That(first, Does.Not.Contain(":"));
             Assert.That(first, Does.Not.Contain(" "));
@@ -371,7 +371,7 @@ namespace Linalab.Terminal.Editor.Tests
         public void TerminalSettings_BuildsFallbackTmuxSessionName_ForEmptyRoot()
         {
             string name = TerminalSettings.BuildTmuxSessionName(string.Empty);
-            Assert.That(name, Does.StartWith("unity-terminal-"));
+            Assert.That(name, Is.EqualTo("unity-terminal"));
             Assert.That(name, Does.Not.Contain("."));
         }
 
