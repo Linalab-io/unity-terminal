@@ -58,6 +58,7 @@ namespace Linalab.Terminal.Editor
             window.wantsMouseMove = true;
             window.Show();
         }
+
         [MenuItem(VerboseLoggingMenuPath)]
         static void ToggleVerboseLogging()
         {
@@ -71,7 +72,6 @@ namespace Linalab.Terminal.Editor
             Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
             return true;
         }
-
 
         void CreateGUI()
         {
@@ -295,6 +295,7 @@ namespace Linalab.Terminal.Editor
         void OnEnable()
         {
             wantsMouseMove = true;
+            Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
             InitializeTerminal();
         }
 
@@ -307,7 +308,6 @@ namespace Linalab.Terminal.Editor
         {
             Cleanup();
         }
-            Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
 
         void OnSurfaceFocusIn(FocusInEvent evt)
         {
@@ -508,7 +508,7 @@ namespace Linalab.Terminal.Editor
                 if (!_loggedBufferPreview && _buffer != null)
                 {
                     _loggedBufferPreview = true;
-                    D.Log($"[Terminal] Buffer preview after output: {BuildBufferPreview()}");
+                    VerboseLog($"[Terminal] Buffer preview after output: {BuildBufferPreview()}");
                 }
 
                 _terminalSurface?.ScrollToBottom();
@@ -792,7 +792,7 @@ namespace Linalab.Terminal.Editor
 
         void OnTextInputSinkValueChanged(ChangeEvent<string> evt)
         {
-            D.Log($"[TerminalSinkValue] previous={DescribeText(evt?.previousValue)} new={DescribeText(evt?.newValue)} composition={DescribeText(Input.compositionString)}");
+            VerboseLog($"[TerminalSinkValue] previous={DescribeText(evt?.previousValue)} new={DescribeText(evt?.newValue)} composition={DescribeText(Input.compositionString)}");
             if (evt == null || string.IsNullOrEmpty(evt.newValue))
             {
                 _lastTextInputSinkValue = SanitizeCommittedText(evt?.newValue);
@@ -851,7 +851,7 @@ namespace Linalab.Terminal.Editor
             }
 
             string sanitizedText = SanitizeCommittedText(text);
-            D.Log($"[TerminalInput] source={source} raw={DescribeText(text)} sanitized={DescribeText(sanitizedText)}");
+            VerboseLog($"[TerminalInput] source={source} raw={DescribeText(text)} sanitized={DescribeText(sanitizedText)}");
             if (string.IsNullOrEmpty(sanitizedText))
             {
                 return;
@@ -867,7 +867,17 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            D.Log($"[TerminalEvent] source={source} char={DescribeText(character == '\0' ? string.Empty : character.ToString())} keyCode={keyCode} composition={DescribeText(Input.compositionString)} sinkValue={DescribeText(_textInputSink?.value)}");
+            VerboseLog($"[TerminalEvent] source={source} char={DescribeText(character == '\0' ? string.Empty : character.ToString())} keyCode={keyCode} composition={DescribeText(Input.compositionString)} sinkValue={DescribeText(_textInputSink?.value)}");
+        }
+
+        static void VerboseLog(string message)
+        {
+            if (!TerminalSettings.VerboseLogging)
+            {
+                return;
+            }
+
+            D.Log(message);
         }
 
         static string DescribeText(string text)

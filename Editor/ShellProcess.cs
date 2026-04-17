@@ -150,7 +150,7 @@ namespace Linalab.Terminal.Editor
 
             if (input.Contains("\uFEFF", StringComparison.Ordinal) || string.Equals(input, "\r", StringComparison.Ordinal))
             {
-                D.Log($"[ShellWrite] payload={DescribePayload(input)} stack={new StackTrace(1, false)}");
+                VerboseLog($"[ShellWrite] payload={DescribePayload(input)} stack={new StackTrace(1, false)}");
             }
 
             try
@@ -209,7 +209,7 @@ namespace Linalab.Terminal.Editor
 
             if (value == 0xEF || value == 0xBB || value == 0xBF || value == 0x0D)
             {
-                D.Log($"[ShellWriteByte] value=0x{value:X2} stack={new StackTrace(1, false)}");
+                VerboseLog($"[ShellWriteByte] value=0x{value:X2} stack={new StackTrace(1, false)}");
             }
 
             try
@@ -256,6 +256,16 @@ namespace Linalab.Terminal.Editor
         public void Resize(int cols, int rows)
         {
             TryResize(cols, rows);
+        }
+
+        static void VerboseLog(string message)
+        {
+            if (!TerminalSettings.VerboseLogging)
+            {
+                return;
+            }
+
+            D.Log(message);
         }
 
         public bool TryResize(int cols, int rows)
