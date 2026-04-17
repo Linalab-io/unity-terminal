@@ -161,6 +161,35 @@ namespace Linalab.Terminal.Editor.Tests
             Assert.That(TerminalInputHandler.TranslateKeyEvent(evt), Is.EqualTo(character.ToString()));
         }
 
+        [TestCase('ㅇ', "ㅇ")]
+        [TestCase('a', "a")]
+        [TestCase('あ', "あ")]
+        public void TerminalInputHandler_SuppressesPrintableCharactersDuringImeComposition(char character, string composition)
+        {
+            var evt = new Event
+            {
+                type = EventType.KeyDown,
+                character = character,
+                keyCode = KeyCode.None
+            };
+
+            Assert.That(TerminalInputHandler.TranslateKeyEvent(evt, composition), Is.Null);
+        }
+
+        [Test]
+        public void TerminalInputHandler_PreservesControlLettersDuringImeComposition()
+        {
+            var evt = new Event
+            {
+                type = EventType.KeyDown,
+                character = 'c',
+                keyCode = KeyCode.C,
+                control = true
+            };
+
+            Assert.That(TerminalInputHandler.TranslateKeyEvent(evt, "한"), Is.EqualTo("\x03"));
+        }
+
         [Test]
         public void TerminalInputHandler_SuppressesEnterDuringImeComposition()
         {
@@ -169,6 +198,19 @@ namespace Linalab.Terminal.Editor.Tests
                 type = EventType.KeyDown,
                 character = '\r',
                 keyCode = KeyCode.Return
+            };
+
+            Assert.That(TerminalInputHandler.TranslateKeyEvent(evt, "한"), Is.Null);
+        }
+
+        [Test]
+        public void TerminalInputHandler_SuppressesKeypadEnterDuringImeComposition()
+        {
+            var evt = new Event
+            {
+                type = EventType.KeyDown,
+                character = '\n',
+                keyCode = KeyCode.KeypadEnter
             };
 
             Assert.That(TerminalInputHandler.TranslateKeyEvent(evt, "한"), Is.Null);

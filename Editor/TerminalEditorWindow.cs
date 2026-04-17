@@ -18,6 +18,7 @@ namespace Linalab.Terminal.Editor
         AnsiParser _parser;
         ShellProcess _shellProcess;
         TerminalSurfaceElement _terminalSurface;
+        TextField _textInputSink;
         IMGUIContainer _toolbarContainer;
         VisualElement _surfaceContainer;
         bool _initialized;
@@ -29,8 +30,23 @@ namespace Linalab.Terminal.Editor
         bool _surfaceAttachPending;
         bool _loggedBufferPreview;
         double _lastPollTime;
+        double _lastWriteTime;
         int _lastAppliedFontSize;
+        string _lastWrittenSequence;
         string _lastAppliedEffectiveFontFamily;
+        string _lastTextInputSinkValue;
+
+        const string TextInputSinkName = "unity-terminal-ime-sink";
+
+        static TerminalRuntimeSession s_sharedSession;
+        static bool s_quittingHookRegistered;
+
+        sealed class TerminalRuntimeSession
+        {
+            public TerminalBuffer Buffer;
+            public AnsiParser Parser;
+            public ShellProcess ShellProcess;
+        }
 
         [MenuItem(MenuPath)]
         public static void ShowWindow()
@@ -52,6 +68,7 @@ namespace Linalab.Terminal.Editor
             EnsureRootInputCallbacks();
             EnsureToolbar();
             EnsureSurfaceContainer();
+            EnsureTextInputSink();
             rootVisualElement.style.flexDirection = FlexDirection.Column;
             EnsureScheduledShellPump();
 
@@ -129,6 +146,55 @@ namespace Linalab.Terminal.Editor
             rootVisualElement.Add(_surfaceContainer);
         }
 
+        void EnsureTextInputSink()
+        {
+            if (rootVisualElement == null)
+            {
+                return;
+            }
+
+            if (_textInputSink != null && _textInputSink.parent != rootVisualElement)
+            {
+                _textInputSink = null;
+            }
+
+            if (_textInputSink != null)
+            {
+                return;
+            }
+
+            _textInputSink = new TextField
+            {
+                name = TextInputSinkName,
+                value = string.Empty,
+                isDelayed = false
+            };
+            _lastTextInputSinkValue = string.Empty;
+            _textInputSink.style.position = Position.Absolute;
+            _textInputSink.style.left = -10000f;
+            _textInputSink.style.top = -10000f;
+            _textInputSink.style.width = 1f;
+            _textInputSink.style.height = 1f;
+            _textInputSink.style.opacity = 0f;
+            _textInputSink.style.paddingLeft = 0f;
+            _textInputSink.style.paddingRight = 0f;
+            _textInputSink.style.paddingTop = 0f;
+            _textInputSink.style.paddingBottom = 0f;
+            _textInputSink.style.borderBottomWidth = 0f;
+            _textInputSink.style.borderTopWidth = 0f;
+            _textInputSink.style.borderLeftWidth = 0f;
+            _textInputSink.style.borderRightWidth = 0f;
+            _textInputSink.style.marginBottom = 0f;
+            _textInputSink.style.marginTop = 0f;
+            _textInputSink.style.marginLeft = 0f;
+            _textInputSink.style.marginRight = 0f;
+            _textInputSink.RegisterValueChangedCallback(OnTextInputSinkValueChanged);
+            _textInputSink.RegisterCallback<KeyDownEvent>(OnTextInputSinkKeyDown, TrickleDown.TrickleDown);
+            _textInputSink.RegisterCallback<FocusInEvent>(OnTextInputSinkFocusIn);
+            _textInputSink.RegisterCallback<FocusOutEvent>(OnTextInputSinkFocusOut);
+            rootVisualElement.Add(_textInputSink);
+        }
+
         void CreateTerminalSurface()
         {
             if (_terminalSurface != null || _buffer == null)
@@ -162,6 +228,7 @@ namespace Linalab.Terminal.Editor
             _surfaceContainer.Add(_terminalSurface);
             _terminalFocused = true;
             _terminalSurface.schedule.Execute(() => _terminalSurface?.Focus()).StartingIn(0);
+            FocusTextInputSink();
             _needsResize = true;
         }
 
@@ -221,6 +288,7 @@ namespace Linalab.Terminal.Editor
         void OnSurfaceFocusIn(FocusInEvent evt)
         {
             _terminalFocused = true;
+            FocusTextInputSink();
             _terminalSurface?.MarkDirtyRepaint();
         }
 
@@ -234,8 +302,39 @@ namespace Linalab.Terminal.Editor
         {
             _terminalFocused = true;
             _terminalSurface?.Focus();
+            FocusTextInputSink();
             _terminalSurface?.MarkDirtyRepaint();
             Repaint();
+        }
+
+        void OnTextInputSinkFocusIn(FocusInEvent evt)
+        {
+            Input.imeCompositionMode = IMECompositionMode.On;
+            _terminalFocused = true;
+            _terminalSurface?.MarkDirtyRepaint();
+        }
+
+        void OnTextInputSinkFocusOut(FocusOutEvent evt)
+        {
+            Input.imeCompositionMode = IMECompositionMode.Auto;
+            _lastTextInputSinkValue = _textInputSink?.value ?? string.Empty;
+            if (_terminalSurface != null && _terminalSurface.focusController?.focusedElement == _terminalSurface)
+            {
+                return;
+            }
+
+            _terminalFocused = false;
+            _terminalSurface?.MarkDirtyRepaint();
+        }
+
+        void FocusTextInputSink()
+        {
+            if (_textInputSink == null)
+            {
+                return;
+            }
+
+            _textInputSink.schedule.Execute(() => _textInputSink?.Focus()).StartingIn(0);
         }
 
         void OnRootMouseDown(MouseDownEvent evt)
@@ -267,15 +366,56 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            _buffer = new TerminalBuffer(DefaultRows, DefaultCols, TerminalSettings.ScrollbackLimit);
-            _parser = new AnsiParser(_buffer);
-            _shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
-            _parser.ResponseCallback = response => _shellProcess?.Write(response);
+            EnsureQuitHook();
+            AcquireOrCreateSharedSession();
             _lastAppliedFontSize = -1;
             _lastAppliedEffectiveFontFamily = null;
 
             EnsureEditorUpdateSubscription();
             _initialized = true;
+        }
+
+        static void EnsureQuitHook()
+        {
+            if (s_quittingHookRegistered)
+            {
+                return;
+            }
+
+            EditorApplication.quitting += DisposeSharedSession;
+            s_quittingHookRegistered = true;
+        }
+
+        void AcquireOrCreateSharedSession()
+        {
+            if (s_sharedSession == null || s_sharedSession.Buffer == null || s_sharedSession.Parser == null || s_sharedSession.ShellProcess == null)
+            {
+                var buffer = new TerminalBuffer(DefaultRows, DefaultCols, TerminalSettings.ScrollbackLimit);
+                var parser = new AnsiParser(buffer);
+                var shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
+                parser.ResponseCallback = response => shellProcess.Write(response);
+                s_sharedSession = new TerminalRuntimeSession
+                {
+                    Buffer = buffer,
+                    Parser = parser,
+                    ShellProcess = shellProcess
+                };
+            }
+
+            _buffer = s_sharedSession.Buffer;
+            _parser = s_sharedSession.Parser;
+            _shellProcess = s_sharedSession.ShellProcess;
+        }
+
+        static void DisposeSharedSession()
+        {
+            if (s_sharedSession == null)
+            {
+                return;
+            }
+
+            s_sharedSession.ShellProcess?.Dispose();
+            s_sharedSession = null;
         }
 
         void EnsureEditorUpdateSubscription()
@@ -455,6 +595,13 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
+            LogEventCharacter("surface-keydown-raw", evt.character, evt.keyCode.ToString());
+
+            if (IsTextInputSinkFocused())
+            {
+                return;
+            }
+
             bool isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.command : evt.control;
             if (isCommandModifier && evt.keyCode == KeyCode.C && _terminalSurface != null && _terminalSurface.HasSelection)
             {
@@ -465,7 +612,7 @@ namespace Linalab.Terminal.Editor
 
             if ((evt.command || evt.control) && evt.keyCode == KeyCode.C)
             {
-                _shellProcess?.Write("\x03");
+                WriteUserInputToShell("\x03", "surface-ctrl-c");
                 _terminalSurface?.ScrollToBottom();
                 evt.Use();
                 return;
@@ -476,11 +623,16 @@ namespace Linalab.Terminal.Editor
                 string paste = TerminalInputHandler.GetPasteText();
                 if (!string.IsNullOrEmpty(paste))
                 {
-                    _shellProcess?.Write(paste);
+                    WriteUserInputToShell(paste, "surface-paste");
                     _terminalSurface?.ScrollToBottom();
                 }
 
                 evt.Use();
+                return;
+            }
+
+            if (!ShouldRouteSurfaceKeyDown(evt))
+            {
                 return;
             }
 
@@ -490,9 +642,315 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            _shellProcess?.Write(translated);
+            if (ShouldSuppressImmediateDuplicateWrite(translated))
+            {
+                evt.Use();
+                return;
+            }
+
+            WriteUserInputToShell(translated, "surface-keydown");
             _terminalSurface?.ScrollToBottom();
             evt.Use();
+        }
+
+        static bool ShouldRouteSurfaceKeyDown(Event evt)
+        {
+            if (evt == null)
+            {
+                return false;
+            }
+
+            if ((evt.command || evt.control) && evt.keyCode != KeyCode.None)
+            {
+                return true;
+            }
+
+            if (evt.character >= 0x20 && evt.character != 0x7f)
+            {
+                return false;
+            }
+
+            return evt.keyCode switch
+            {
+                KeyCode.Return => true,
+                KeyCode.KeypadEnter => true,
+                KeyCode.Backspace => true,
+                KeyCode.Tab => true,
+                KeyCode.Escape => true,
+                KeyCode.Delete => true,
+                KeyCode.Home => true,
+                KeyCode.End => true,
+                KeyCode.PageUp => true,
+                KeyCode.PageDown => true,
+                KeyCode.Insert => true,
+                KeyCode.UpArrow => true,
+                KeyCode.DownArrow => true,
+                KeyCode.LeftArrow => true,
+                KeyCode.RightArrow => true,
+                KeyCode.F1 => true,
+                KeyCode.F2 => true,
+                KeyCode.F3 => true,
+                KeyCode.F4 => true,
+                KeyCode.F5 => true,
+                KeyCode.F6 => true,
+                KeyCode.F7 => true,
+                KeyCode.F8 => true,
+                KeyCode.F9 => true,
+                KeyCode.F10 => true,
+                KeyCode.F11 => true,
+                KeyCode.F12 => true,
+                _ => false
+            };
+        }
+
+        void OnTextInputSinkKeyDown(KeyDownEvent evt)
+        {
+            if (evt == null)
+            {
+                return;
+            }
+
+            LogEventCharacter("sink-keydown-raw", evt.character, evt.keyCode.ToString());
+
+            bool isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.commandKey : evt.ctrlKey;
+            if (isCommandModifier && evt.keyCode == KeyCode.C && _terminalSurface != null && _terminalSurface.HasSelection)
+            {
+                EditorGUIUtility.systemCopyBuffer = _terminalSurface.GetSelectedText();
+                evt.StopImmediatePropagation();
+                return;
+            }
+
+            if ((evt.commandKey || evt.ctrlKey) && evt.keyCode == KeyCode.C)
+            {
+                WriteUserInputToShell("\x03", "sink-ctrl-c");
+                _terminalSurface?.ScrollToBottom();
+                evt.StopImmediatePropagation();
+                return;
+            }
+
+            if (!ShouldRouteTextSinkKeyDown(evt))
+            {
+                return;
+            }
+
+            string translated = TerminalInputHandler.TranslateKeyEvent(evt.character, evt.keyCode, evt.ctrlKey, evt.shiftKey, Input.compositionString);
+            if (translated == null)
+            {
+                return;
+            }
+
+            if (ShouldSuppressImmediateDuplicateWrite(translated))
+            {
+                evt.StopImmediatePropagation();
+                return;
+            }
+
+            WriteUserInputToShell(translated, "sink-keydown");
+            _terminalSurface?.ScrollToBottom();
+            evt.StopImmediatePropagation();
+        }
+
+        void OnTextInputSinkValueChanged(ChangeEvent<string> evt)
+        {
+            D.Log($"[TerminalSinkValue] previous={DescribeText(evt?.previousValue)} new={DescribeText(evt?.newValue)} composition={DescribeText(Input.compositionString)}");
+            if (evt == null || string.IsNullOrEmpty(evt.newValue))
+            {
+                _lastTextInputSinkValue = SanitizeCommittedText(evt?.newValue);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(Input.compositionString))
+            {
+                return;
+            }
+
+            string sanitizedNewValue = SanitizeCommittedText(evt.newValue);
+            string committedText = ExtractCommittedText(_lastTextInputSinkValue, sanitizedNewValue);
+            committedText = SanitizeCommittedText(committedText);
+            if (string.IsNullOrEmpty(committedText))
+            {
+                _lastTextInputSinkValue = sanitizedNewValue;
+                return;
+            }
+
+            WriteUserInputToShell(committedText, "sink-value-changed");
+            _terminalSurface?.ScrollToBottom();
+            _lastTextInputSinkValue = sanitizedNewValue;
+        }
+
+        void WriteUserInputToShell(string text, string source)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return;
+            }
+
+            string sanitizedText = SanitizeCommittedText(text);
+            D.Log($"[TerminalInput] source={source} raw={DescribeText(text)} sanitized={DescribeText(sanitizedText)}");
+            if (string.IsNullOrEmpty(sanitizedText))
+            {
+                return;
+            }
+
+            _shellProcess?.Write(sanitizedText);
+        }
+
+        void LogEventCharacter(string source, char character, string keyCode)
+        {
+            if (character == '\0' && string.IsNullOrEmpty(Input.compositionString))
+            {
+                return;
+            }
+
+            D.Log($"[TerminalEvent] source={source} char={DescribeText(character == '\0' ? string.Empty : character.ToString())} keyCode={keyCode} composition={DescribeText(Input.compositionString)} sinkValue={DescribeText(_textInputSink?.value)}");
+        }
+
+        static string DescribeText(string text)
+        {
+            if (text == null)
+            {
+                return "<null>";
+            }
+
+            if (text.Length == 0)
+            {
+                return "<empty>";
+            }
+
+            var builder = new System.Text.StringBuilder();
+            builder.Append('[');
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                builder.Append("U+");
+                builder.Append(((int)text[i]).ToString("X4"));
+            }
+
+            builder.Append("] \"");
+            builder.Append(text.Replace("\r", "\\r", System.StringComparison.Ordinal).Replace("\n", "\\n", System.StringComparison.Ordinal));
+            builder.Append('"');
+            return builder.ToString();
+        }
+
+        static string ExtractCommittedText(string previousValue, string newValue)
+        {
+            string previous = previousValue ?? string.Empty;
+            string current = newValue ?? string.Empty;
+            if (current.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            if (current.StartsWith(previous, System.StringComparison.Ordinal))
+            {
+                return current.Substring(previous.Length);
+            }
+
+            int commonLength = 0;
+            int maxCommonLength = Mathf.Min(previous.Length, current.Length);
+            while (commonLength < maxCommonLength && previous[commonLength] == current[commonLength])
+            {
+                commonLength++;
+            }
+
+            return current.Substring(commonLength);
+        }
+
+        static string SanitizeCommittedText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return string.Empty;
+            }
+
+            return text
+                .Replace("\uFEFF", string.Empty, System.StringComparison.Ordinal)
+                .Replace("<feff>", string.Empty, System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        bool ShouldRouteTextSinkKeyDown(KeyDownEvent evt)
+        {
+            if (evt == null)
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(Input.compositionString))
+            {
+                return false;
+            }
+
+            if (evt.commandKey && !evt.ctrlKey)
+            {
+                return false;
+            }
+
+            if ((evt.commandKey || evt.ctrlKey) && evt.keyCode == KeyCode.V)
+            {
+                return false;
+            }
+
+            if (evt.ctrlKey)
+            {
+                return true;
+            }
+
+            if (evt.character >= 0x20 && evt.character != 0x7f)
+            {
+                return false;
+            }
+
+            return evt.keyCode switch
+            {
+                KeyCode.Return => true,
+                KeyCode.KeypadEnter => true,
+                KeyCode.Backspace => true,
+                KeyCode.Tab => true,
+                KeyCode.Escape => true,
+                KeyCode.Delete => true,
+                KeyCode.Home => true,
+                KeyCode.End => true,
+                KeyCode.PageUp => true,
+                KeyCode.PageDown => true,
+                KeyCode.Insert => true,
+                KeyCode.UpArrow => true,
+                KeyCode.DownArrow => true,
+                KeyCode.LeftArrow => true,
+                KeyCode.RightArrow => true,
+                KeyCode.F1 => true,
+                KeyCode.F2 => true,
+                KeyCode.F3 => true,
+                KeyCode.F4 => true,
+                KeyCode.F5 => true,
+                KeyCode.F6 => true,
+                KeyCode.F7 => true,
+                KeyCode.F8 => true,
+                KeyCode.F9 => true,
+                KeyCode.F10 => true,
+                KeyCode.F11 => true,
+                KeyCode.F12 => true,
+                _ => false
+            };
+        }
+
+        bool IsTextInputSinkFocused()
+        {
+            return _textInputSink != null && _textInputSink.focusController?.focusedElement == _textInputSink;
+        }
+
+        bool ShouldSuppressImmediateDuplicateWrite(string translated)
+        {
+            double now = EditorApplication.timeSinceStartup;
+            bool isImmediateDuplicate = string.Equals(_lastWrittenSequence, translated, System.StringComparison.Ordinal)
+                && now - _lastWriteTime <= 0.03d;
+
+            _lastWrittenSequence = translated;
+            _lastWriteTime = now;
+            return isImmediateDuplicate;
         }
 
         void RestartShell()
@@ -513,6 +971,12 @@ namespace Linalab.Terminal.Editor
             _shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
             _parser = new AnsiParser(_buffer);
             _parser.ResponseCallback = response => _shellProcess?.Write(response);
+            s_sharedSession = new TerminalRuntimeSession
+            {
+                Buffer = _buffer,
+                Parser = _parser,
+                ShellProcess = _shellProcess
+            };
             StartShell();
         }
 
@@ -552,8 +1016,10 @@ namespace Linalab.Terminal.Editor
 
         void ClearTerminal()
         {
-            _buffer?.Reset();
             _terminalSurface?.ClearSelection();
+            _buffer?.Reset();
+            _shellProcess?.Write("\x0c");
+            _terminalSurface?.ScrollToBottom();
         }
 
         string BuildBufferPreview()
@@ -608,7 +1074,29 @@ namespace Linalab.Terminal.Editor
             }
 
             _shellPumpScheduled = false;
-            _shellProcess?.Dispose();
+            Input.imeCompositionMode = IMECompositionMode.Auto;
+
+            if (_terminalSurface != null)
+            {
+                _terminalSurface.OnGridSizeChanged -= OnGridSizeChanged;
+                _terminalSurface.OnInputRequested -= HandleKeyInput;
+                _terminalSurface.OnInteractionStarted -= OnSurfaceInteractionStarted;
+                _terminalSurface.UnregisterCallback<FocusInEvent>(OnSurfaceFocusIn);
+                _terminalSurface.UnregisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
+            }
+
+            if (_textInputSink != null)
+            {
+                _textInputSink.UnregisterValueChangedCallback(OnTextInputSinkValueChanged);
+                _textInputSink.UnregisterCallback<KeyDownEvent>(OnTextInputSinkKeyDown, TrickleDown.TrickleDown);
+                _textInputSink.UnregisterCallback<FocusInEvent>(OnTextInputSinkFocusIn);
+                _textInputSink.UnregisterCallback<FocusOutEvent>(OnTextInputSinkFocusOut);
+            }
+
+            if (rootVisualElement != null && _rootInputCallbacksRegistered)
+            {
+                rootVisualElement.UnregisterCallback<MouseDownEvent>(OnRootMouseDown, TrickleDown.TrickleDown);
+            }
 
             _shellProcess = null;
             _parser = null;
@@ -616,8 +1104,10 @@ namespace Linalab.Terminal.Editor
             _toolbarContainer = null;
             _surfaceContainer = null;
             _terminalSurface = null;
+            _textInputSink = null;
             _rootInputCallbacksRegistered = false;
             _surfaceAttachPending = false;
+            _initialized = false;
         }
     }
 }

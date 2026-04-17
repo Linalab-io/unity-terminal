@@ -100,12 +100,46 @@ This keeps shell I/O, parsing, state, and drawing responsibilities separated ins
 
 - **Windows is not supported yet.** `ShellProcess.Start()` throws a `PlatformNotSupportedException` on Windows.
 - **This package is shell-oriented for POSIX environments.** It assumes a shell can be resolved from `$SHELL`, `/bin/zsh`, or `/bin/bash`.
-- **No repo-local test or CI workflow is present today.**
+- **Headless EditMode coverage is backend-focused.** The automated smoke tests validate shell/process, ANSI parsing, buffer updates, and resize semantics, but not final on-screen rendering quality.
+
+## Testing
+
+Editor tests now live under:
+
+- `Tests/Editor/Linalab.Terminal.Tests.Editor.asmdef`
+- `Tests/Editor/TerminalSmokeTests.cs`
+
+Current automated coverage includes:
+
+- shell startup through `ShellProcess`
+- stdout/stderr drain flow into `AnsiParser`
+- visible text landing in `TerminalBuffer`
+- buffer resize preservation and cursor clamping
+
+Example headless EditMode run:
+
+```text
+Unity -runTests -batchmode -nographics -projectPath <PROJECT> -testPlatform EditMode -testFilter TerminalSmokeTests
+```
+
+Because Unity blocks opening the same project in two editor instances, run the batchmode test against a closed project or a temporary clone when your main editor session is already open.
+
+## Manual QA
+
+Use `docs/manual-qa-checklist.md` for interactive verification of:
+
+- terminal window launch
+- prompt visibility
+- keyboard input and paste
+- selection/copy behavior
+- resize and clipping behavior
+- restart/clear actions
 
 ## Development Notes
 
 - All product code currently lives under `Editor/`.
 - The assembly definition is `Editor/UnityEditorTerminal.Editor.asmdef`.
+- Test coverage lives in `Tests/Editor/` via `Linalab.Terminal.Tests.Editor.asmdef`.
 - Unity metadata files (`*.meta`) are part of the package layout but are not implementation sources.
 
 ## License

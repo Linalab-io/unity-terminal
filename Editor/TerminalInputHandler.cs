@@ -10,6 +10,31 @@ namespace Linalab.Terminal.Editor
             return TranslateKeyEvent(evt, Input.compositionString);
         }
 
+        public static string TranslateKeyEvent(char character, KeyCode keyCode, bool control, bool shift, string composition)
+        {
+            if (TryTranslateControlLetter(keyCode, control, out var controlSequence))
+            {
+                return controlSequence;
+            }
+
+            if (TryTranslateSpecialKey(keyCode, composition, out var specialSequence))
+            {
+                return specialSequence;
+            }
+
+            if (TryTranslateArrowKey(keyCode, shift, control, out var arrowSequence))
+            {
+                return arrowSequence;
+            }
+
+            if (TryTranslateFunctionKey(keyCode, out var functionSequence))
+            {
+                return functionSequence;
+            }
+
+            return TryTranslatePrintableCharacter(character, composition, out var printableSequence) ? printableSequence : null;
+        }
+
         public static string TranslateKeyEvent(Event evt, string composition)
         {
             if (evt == null || evt.type != EventType.KeyDown)
@@ -17,42 +42,27 @@ namespace Linalab.Terminal.Editor
                 return null;
             }
 
-            if (TryTranslateControlLetter(evt, out var controlSequence))
-            {
-                return controlSequence;
-            }
-
-            if (TryTranslateSpecialKey(evt, composition, out var specialSequence))
-            {
-                return specialSequence;
-            }
-
-            if (TryTranslateArrowKey(evt, out var arrowSequence))
-            {
-                return arrowSequence;
-            }
-
-            if (TryTranslateFunctionKey(evt, out var functionSequence))
-            {
-                return functionSequence;
-            }
-
-            return TryTranslatePrintableCharacter(evt, composition, out var printableSequence) ? printableSequence : null;
+            return TranslateKeyEvent(evt.character, evt.keyCode, evt.control, evt.shift, composition);
         }
 
         public static string GetPasteText() => EditorGUIUtility.systemCopyBuffer;
 
         static bool TryTranslatePrintableCharacter(Event evt, string composition, out string translated)
         {
-            if (ShouldSuppressAsciiDuringImeComposition(evt, composition))
+            return TryTranslatePrintableCharacter(evt.character, composition, out translated);
+        }
+
+        static bool TryTranslatePrintableCharacter(char character, string composition, out string translated)
+        {
+            if (ShouldSuppressPrintableDuringImeComposition(character, composition))
             {
                 translated = null;
                 return false;
             }
 
-            if (evt.character >= 0x20 && evt.character != 0x7f)
+            if (character >= 0x20 && character != 0x7f)
             {
-                translated = evt.character.ToString();
+                translated = character.ToString();
                 return true;
             }
 
@@ -60,37 +70,42 @@ namespace Linalab.Terminal.Editor
             return false;
         }
 
-        static bool ShouldSuppressAsciiDuringImeComposition(Event evt, string composition)
+        static bool ShouldSuppressPrintableDuringImeComposition(Event evt, string composition)
         {
-            if (evt == null)
-            {
-                return false;
-            }
+            return ShouldSuppressPrintableDuringImeComposition(evt?.character ?? '\0', composition);
+        }
 
+        static bool ShouldSuppressPrintableDuringImeComposition(char character, string composition)
+        {
             if (string.IsNullOrEmpty(composition))
             {
                 return false;
             }
 
-            return evt.character is >= (char)0x20 and <= (char)0x7e;
+            return character >= 0x20 && character != 0x7f;
         }
 
         static bool TryTranslateControlLetter(Event evt, out string translated)
         {
-            if (!evt.control)
+            return TryTranslateControlLetter(evt.keyCode, evt.control, out translated);
+        }
+
+        static bool TryTranslateControlLetter(KeyCode keyCode, bool control, out string translated)
+        {
+            if (!control)
             {
                 translated = null;
                 return false;
             }
 
-            if (evt.keyCode >= KeyCode.A && evt.keyCode <= KeyCode.Z)
+            if (keyCode >= KeyCode.A && keyCode <= KeyCode.Z)
             {
-                int controlValue = (evt.keyCode - KeyCode.A) + 1;
+                int controlValue = (keyCode - KeyCode.A) + 1;
                 translated = ((char)controlValue).ToString();
                 return true;
             }
 
-            translated = evt.keyCode switch
+            translated = keyCode switch
             {
                 KeyCode.C => "\x03",
                 KeyCode.D => "\x04",
@@ -107,14 +122,19 @@ namespace Linalab.Terminal.Editor
 
         static bool TryTranslateSpecialKey(Event evt, string composition, out string translated)
         {
+            return TryTranslateSpecialKey(evt.keyCode, composition, out translated);
+        }
+
+        static bool TryTranslateSpecialKey(KeyCode keyCode, string composition, out string translated)
+        {
             if (!string.IsNullOrEmpty(composition)
-                && (evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter))
+                && (keyCode == KeyCode.Return || keyCode == KeyCode.KeypadEnter))
             {
                 translated = null;
                 return false;
             }
 
-            translated = evt.keyCode switch
+            translated = keyCode switch
             {
                 KeyCode.Return or KeyCode.KeypadEnter => "\r",
                 KeyCode.Backspace => "\x7f",
@@ -134,12 +154,17 @@ namespace Linalab.Terminal.Editor
 
         static bool TryTranslateArrowKey(Event evt, out string translated)
         {
-            translated = evt.keyCode switch
+            return TryTranslateArrowKey(evt.keyCode, evt.shift, evt.control, out translated);
+        }
+
+        static bool TryTranslateArrowKey(KeyCode keyCode, bool shift, bool control, out string translated)
+        {
+            translated = keyCode switch
             {
-                KeyCode.UpArrow => BuildArrowSequence('A', evt.shift, evt.control),
-                KeyCode.DownArrow => BuildArrowSequence('B', evt.shift, evt.control),
-                KeyCode.RightArrow => BuildArrowSequence('C', evt.shift, evt.control),
-                KeyCode.LeftArrow => BuildArrowSequence('D', evt.shift, evt.control),
+                KeyCode.UpArrow => BuildArrowSequence('A', shift, control),
+                KeyCode.DownArrow => BuildArrowSequence('B', shift, control),
+                KeyCode.RightArrow => BuildArrowSequence('C', shift, control),
+                KeyCode.LeftArrow => BuildArrowSequence('D', shift, control),
                 _ => null
             };
 
@@ -163,7 +188,12 @@ namespace Linalab.Terminal.Editor
 
         static bool TryTranslateFunctionKey(Event evt, out string translated)
         {
-            translated = evt.keyCode switch
+            return TryTranslateFunctionKey(evt.keyCode, out translated);
+        }
+
+        static bool TryTranslateFunctionKey(KeyCode keyCode, out string translated)
+        {
+            translated = keyCode switch
             {
                 KeyCode.F1 => "\x1bOP",
                 KeyCode.F2 => "\x1bOQ",

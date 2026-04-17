@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using Linalab;
 
 namespace Linalab.Terminal.Editor
 {
@@ -147,6 +148,11 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
+            if (input.Contains("\uFEFF", StringComparison.Ordinal) || string.Equals(input, "\r", StringComparison.Ordinal))
+            {
+                D.Log($"[ShellWrite] payload={DescribePayload(input)} stack={new StackTrace(1, false)}");
+            }
+
             try
             {
                 lock (_syncRoot)
@@ -168,11 +174,42 @@ namespace Linalab.Terminal.Editor
             }
         }
 
+        static string DescribePayload(string input)
+        {
+            if (string.IsNullOrEmpty(input))
+            {
+                return "<empty>";
+            }
+
+            var builder = new StringBuilder();
+            builder.Append('[');
+            for (int i = 0; i < input.Length; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                builder.Append("U+");
+                builder.Append(((int)input[i]).ToString("X4", CultureInfo.InvariantCulture));
+            }
+
+            builder.Append("] \"");
+            builder.Append(input.Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal));
+            builder.Append('"');
+            return builder.ToString();
+        }
+
         public void WriteByte(byte value)
         {
             if (_disposed)
             {
                 return;
+            }
+
+            if (value == 0xEF || value == 0xBB || value == 0xBF || value == 0x0D)
+            {
+                D.Log($"[ShellWriteByte] value=0x{value:X2} stack={new StackTrace(1, false)}");
             }
 
             try
@@ -396,7 +433,7 @@ namespace Linalab.Terminal.Editor
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                StandardInputEncoding = Encoding.UTF8,
+                StandardInputEncoding = new UTF8Encoding(false),
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
                 UseShellExecute = false,
