@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -10,6 +11,12 @@ using Linalab;
 
 namespace Linalab.Terminal.Editor
 {
+    sealed class TmuxSessionInfo
+    {
+        public string Name;
+        public string WorkspacePath;
+    }
+
     public interface IShellProcess : IDisposable
     {
         bool IsRunning { get; }
@@ -749,16 +756,192 @@ namespace Linalab.Terminal.Editor
 
         static bool CommandExists(string command)
         {
+            return !string.IsNullOrEmpty(ResolveCommandPath(command));
+        }
+
+        static string ResolveCommandPath(string command)
+        {
+            if (string.IsNullOrEmpty(command))
+            {
+                return null;
+            }
+
             string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
             foreach (string directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (File.Exists(Path.Combine(directory, command)))
+                var candidate = Path.Combine(directory, command);
+                if (File.Exists(candidate))
                 {
-                    return true;
+                    return candidate;
                 }
             }
 
-            return false;
+            return null;
+        }
+
+        public static string[] ListTmuxSessions()
+        {
+            var sessions = ListTmuxSessionInfos();
+            if (sessions.Length == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var names = new string[sessions.Length];
+            for (int i = 0; i < sessions.Length; i++)
+            {
+                names[i] = sessions[i].Name;
+            }
+
+            return names;
+        }
+
+        static TmuxSessionInfo[] ListTmuxSessionInfos()
+        {
+            var tmuxPath = ResolveCommandPath("tmux");
+            if (string.IsNullOrEmpty(tmuxPath))
+            {
+                return Array.Empty<TmuxSessionInfo>();
+            }
+
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = tmuxPath,
+                        Arguments = "list-sessions -F #{session_name}\t#{session_path}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit(1500);
+                if (process.ExitCode != 0)
+                {
+                    return Array.Empty<TmuxSessionInfo>();
+                }
+
+                var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                var result = new List<TmuxSessionInfo>(lines.Length);
+                foreach (var rawLine in lines)
+                {
+                    var line = rawLine?.Trim();
+                    if (string.IsNullOrEmpty(line))
+                    {
+                        continue;
+                    }
+
+                    var parts = line.Split('\t');
+                    var name = parts.Length > 0 ? parts[0].Trim() : string.Empty;
+                    if (string.IsNullOrEmpty(name))
+                    {
+                        continue;
+                    }
+
+                    var workspacePath = parts.Length > 1 ? NormalizeWorkspacePath(parts[1]) : null;
+                    result.Add(new TmuxSessionInfo
+                    {
+                        Name = name,
+                        WorkspacePath = workspacePath
+                    });
+                }
+
+                return result.ToArray();
+            }
+            catch (InvalidOperationException)
+            {
+                return Array.Empty<TmuxSessionInfo>();
+            }
+            catch (IOException)
+            {
+                return Array.Empty<TmuxSessionInfo>();
+            }
+        }
+
+        public static string[] ListTmuxWorkspaceSessions(string workspacePath)
+        {
+            var normalizedWorkspacePath = NormalizeWorkspacePath(workspacePath);
+            if (string.IsNullOrEmpty(normalizedWorkspacePath))
+            {
+                return Array.Empty<string>();
+            }
+
+            var all = ListTmuxSessionInfos();
+            if (all.Length == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var result = new List<string>();
+            foreach (var session in all)
+            {
+                if (!string.Equals(session.WorkspacePath, normalizedWorkspacePath, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                result.Add(session.Name);
+            }
+
+            result.Sort(StringComparer.Ordinal);
+            return result.ToArray();
+        }
+
+        public static string FindUnusedTmuxSessionName(string canonical)
+        {
+            if (string.IsNullOrEmpty(canonical))
+            {
+                return canonical;
+            }
+
+            var existing = new HashSet<string>(ListTmuxSessions(), StringComparer.Ordinal);
+            if (!existing.Contains(canonical))
+            {
+                return canonical;
+            }
+
+            for (int i = 2; i < 1000; i++)
+            {
+                var candidate = canonical + "-" + i.ToString(CultureInfo.InvariantCulture);
+                if (!existing.Contains(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return canonical + "-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        }
+
+        static string NormalizeWorkspacePath(string workspacePath)
+        {
+            var trimmedPath = workspacePath?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(trimmedPath))
+            {
+                return null;
+            }
+
+            var hasDrivePrefix = trimmedPath.Length >= 3
+                && char.IsLetter(trimmedPath[0])
+                && trimmedPath[1] == ':'
+                && (trimmedPath[2] == '/' || trimmedPath[2] == '\\');
+            var withoutTrailingSlash = trimmedPath.Replace('\\', '/').TrimEnd('/');
+            var absolutePath = hasDrivePrefix || withoutTrailingSlash.StartsWith("/", StringComparison.Ordinal)
+                ? withoutTrailingSlash
+                : Path.GetFullPath(withoutTrailingSlash);
+            var normalized = absolutePath.Replace('\\', '/');
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return normalized.ToLowerInvariant();
+            }
+
+            return normalized;
         }
 
         void StartReaders()

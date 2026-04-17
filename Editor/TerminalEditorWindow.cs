@@ -1,3 +1,4 @@
+using System;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -9,7 +10,6 @@ namespace Linalab.Terminal.Editor
     {
         const string MenuPath = "Window/Linalab/Unity Terminal";
         const string VerboseLoggingMenuPath = MenuPath + "/Verbose Logging";
-        const string TmuxAutoAttachMenuPath = MenuPath + "/Tmux Auto Attach";
         const int DefaultRows = 24;
         const int DefaultCols = 80;
         const int MinimumUsableRows = 2;
@@ -30,6 +30,7 @@ namespace Linalab.Terminal.Editor
         bool _editorUpdateSubscribed;
         bool _shellPumpScheduled;
         bool _surfaceAttachPending;
+        bool _restoreTextInputFocusAfterSubmit;
         bool _loggedBufferPreview;
         double _lastPollTime;
         double _lastWriteTime;
@@ -71,20 +72,6 @@ namespace Linalab.Terminal.Editor
         static bool ValidateVerboseLoggingMenu()
         {
             Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
-            return true;
-        }
-
-        [MenuItem(TmuxAutoAttachMenuPath)]
-        static void ToggleTmuxAutoAttach()
-        {
-            var enabled = TerminalSettings.ToggleTmuxAutoAttach();
-            Menu.SetChecked(TmuxAutoAttachMenuPath, enabled);
-        }
-
-        [MenuItem(TmuxAutoAttachMenuPath, true)]
-        static bool ValidateTmuxAutoAttachMenu()
-        {
-            Menu.SetChecked(TmuxAutoAttachMenuPath, TerminalSettings.TmuxAutoAttach);
             return true;
         }
 
@@ -311,7 +298,6 @@ namespace Linalab.Terminal.Editor
         {
             wantsMouseMove = true;
             Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
-            Menu.SetChecked(TmuxAutoAttachMenuPath, TerminalSettings.TmuxAutoAttach);
             InitializeTerminal();
         }
 
@@ -350,6 +336,7 @@ namespace Linalab.Terminal.Editor
         void OnTextInputSinkFocusIn(FocusInEvent evt)
         {
             Input.imeCompositionMode = IMECompositionMode.On;
+            _restoreTextInputFocusAfterSubmit = false;
             _terminalFocused = true;
             _terminalSurface?.MarkDirtyRepaint();
         }
@@ -358,6 +345,13 @@ namespace Linalab.Terminal.Editor
         {
             Input.imeCompositionMode = IMECompositionMode.Auto;
             _lastTextInputSinkValue = _textInputSink?.value ?? string.Empty;
+            if (_restoreTextInputFocusAfterSubmit)
+            {
+                _restoreTextInputFocusAfterSubmit = false;
+                FocusTextInputSink();
+                return;
+            }
+
             if (_terminalSurface != null && _terminalSurface.focusController?.focusedElement == _terminalSurface)
             {
                 return;
@@ -628,6 +622,17 @@ namespace Linalab.Terminal.Editor
                 ClearTerminal();
             }
 
+            var tmuxAutoAttach = GUILayout.Toggle(
+                TerminalSettings.TmuxAutoAttach,
+                new GUIContent("tmux", "Auto-attach to the persistent tmux session for this Unity workspace."),
+                EditorStyles.toolbarButton,
+                GUILayout.Width(52f));
+            if (tmuxAutoAttach != TerminalSettings.TmuxAutoAttach)
+            {
+                HandleTmuxToggleChange(tmuxAutoAttach);
+                GUIUtility.ExitGUI();
+            }
+
             if (GUILayout.Button("A-", EditorStyles.toolbarButton, GUILayout.Width(32f)))
             {
                 DecreaseFontSize();
@@ -639,6 +644,12 @@ namespace Linalab.Terminal.Editor
             }
 
             GUILayout.FlexibleSpace();
+            if (TerminalSettings.TmuxAutoAttach)
+            {
+                GUILayout.Label($"tmux:{TerminalSettings.GetTmuxSessionName()}", EditorStyles.miniLabel);
+                GUILayout.Space(8f);
+            }
+
             GUILayout.Label(_terminalFocused ? "Focused" : "Click terminal to focus", EditorStyles.miniLabel);
             GUILayout.EndHorizontal();
 
@@ -767,6 +778,7 @@ namespace Linalab.Terminal.Editor
             }
 
             LogEventCharacter("sink-keydown-raw", evt.character, evt.keyCode.ToString());
+            bool isSubmitKey = IsTextSinkSubmitKey(evt.keyCode);
 
             var isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.commandKey : evt.ctrlKey;
             if (isCommandModifier && evt.keyCode == KeyCode.C && _terminalSurface != null && _terminalSurface.HasSelection)
@@ -803,6 +815,12 @@ namespace Linalab.Terminal.Editor
 
             WriteUserInputToShell(translated, "sink-keydown");
             _terminalSurface?.ScrollToBottom();
+            if (isSubmitKey && string.IsNullOrEmpty(Input.compositionString))
+            {
+                _restoreTextInputFocusAfterSubmit = true;
+                FocusTextInputSink();
+            }
+
             evt.StopImmediatePropagation();
         }
 
@@ -1033,6 +1051,11 @@ namespace Linalab.Terminal.Editor
             return _textInputSink != null && _textInputSink.focusController?.focusedElement == _textInputSink;
         }
 
+        static bool IsTextSinkSubmitKey(KeyCode keyCode)
+        {
+            return keyCode == KeyCode.Return || keyCode == KeyCode.KeypadEnter;
+        }
+
         bool ShouldSuppressImmediateDuplicateWrite(string translated)
         {
             var now = EditorApplication.timeSinceStartup;
@@ -1148,6 +1171,54 @@ namespace Linalab.Terminal.Editor
             TerminalSettings.FontSize += 1;
             _terminalSurface?.InvalidateStyle();
             _needsResize = true;
+        }
+
+        void HandleTmuxToggleChange(bool enable)
+        {
+            if (!enable)
+            {
+                TerminalSettings.TmuxAutoAttach = false;
+                RestartShell();
+                return;
+            }
+
+            var canonical = TerminalSettings.GetCanonicalTmuxSessionName();
+            var existing = ShellProcess.ListTmuxWorkspaceSessions(TerminalSettings.GetProjectRootDirectory());
+
+            if (existing == null || existing.Length == 0)
+            {
+                TerminalSettings.TmuxSessionNameOverride = string.Empty;
+                TerminalSettings.TmuxAutoAttach = true;
+                RestartShell();
+                return;
+            }
+
+            var result = TmuxSessionPicker.ShowModal(existing, canonical, out var selected);
+            switch (result)
+            {
+                case TmuxPickerResult.Attach:
+                    TerminalSettings.TmuxSessionNameOverride =
+                        string.Equals(selected, canonical, StringComparison.Ordinal)
+                            ? string.Empty
+                            : selected;
+                    TerminalSettings.TmuxAutoAttach = true;
+                    RestartShell();
+                    break;
+
+                case TmuxPickerResult.CreateNew:
+                    var newName = ShellProcess.FindUnusedTmuxSessionName(canonical);
+                    TerminalSettings.TmuxSessionNameOverride =
+                        string.Equals(newName, canonical, StringComparison.Ordinal)
+                            ? string.Empty
+                            : newName;
+                    TerminalSettings.TmuxAutoAttach = true;
+                    RestartShell();
+                    break;
+
+                case TmuxPickerResult.Cancel:
+                default:
+                    break;
+            }
         }
 
         void DecreaseFontSize()
