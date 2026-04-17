@@ -14,7 +14,7 @@ namespace Linalab.Terminal.Editor
             {
                 label = "Unity Terminal",
                 guiHandler = _ => DrawGui(),
-                keywords = new System.Collections.Generic.HashSet<string>(new[] { "terminal", "shell", "zsh", "bash", "workspace", "font" })
+                keywords = new System.Collections.Generic.HashSet<string>(new[] { "terminal", "shell", "zsh", "bash", "workspace", "font", "tmux", "session", "logging" })
             };
         }
 
@@ -40,6 +40,15 @@ namespace Linalab.Terminal.Editor
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Workspace", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox($"Project root: {projectRoot}", MessageType.None);
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Session", EditorStyles.boldLabel);
+            TerminalSettings.TmuxAutoAttach = EditorGUILayout.Toggle("Tmux Auto Attach", TerminalSettings.TmuxAutoAttach);
+            if (TerminalSettings.TmuxAutoAttach)
+            {
+                var sessionName = TerminalSettings.GetTmuxSessionName();
+                EditorGUILayout.HelpBox($"Session: {sessionName}\nCommand: tmux new-session -A -s {sessionName}\nRestart the terminal window after changes to apply.", MessageType.Info);
+            }
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Display", EditorStyles.boldLabel);

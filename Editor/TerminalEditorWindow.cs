@@ -7,8 +7,9 @@ namespace Linalab.Terminal.Editor
 {
     public sealed class TerminalEditorWindow : EditorWindow
     {
-        const string MenuPath = "Tools/Unity Editor Terminal";
+        const string MenuPath = "Window/Linalab/Unity Terminal";
         const string VerboseLoggingMenuPath = MenuPath + "/Verbose Logging";
+        const string TmuxAutoAttachMenuPath = MenuPath + "/Tmux Auto Attach";
         const int DefaultRows = 24;
         const int DefaultCols = 80;
         const int MinimumUsableRows = 2;
@@ -62,7 +63,7 @@ namespace Linalab.Terminal.Editor
         [MenuItem(VerboseLoggingMenuPath)]
         static void ToggleVerboseLogging()
         {
-            bool enabled = TerminalSettings.ToggleVerboseLogging();
+            var enabled = TerminalSettings.ToggleVerboseLogging();
             Menu.SetChecked(VerboseLoggingMenuPath, enabled);
         }
 
@@ -70,6 +71,20 @@ namespace Linalab.Terminal.Editor
         static bool ValidateVerboseLoggingMenu()
         {
             Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
+            return true;
+        }
+
+        [MenuItem(TmuxAutoAttachMenuPath)]
+        static void ToggleTmuxAutoAttach()
+        {
+            var enabled = TerminalSettings.ToggleTmuxAutoAttach();
+            Menu.SetChecked(TmuxAutoAttachMenuPath, enabled);
+        }
+
+        [MenuItem(TmuxAutoAttachMenuPath, true)]
+        static bool ValidateTmuxAutoAttachMenu()
+        {
+            Menu.SetChecked(TmuxAutoAttachMenuPath, TerminalSettings.TmuxAutoAttach);
             return true;
         }
 
@@ -296,6 +311,7 @@ namespace Linalab.Terminal.Editor
         {
             wantsMouseMove = true;
             Menu.SetChecked(VerboseLoggingMenuPath, TerminalSettings.VerboseLogging);
+            Menu.SetChecked(TmuxAutoAttachMenuPath, TerminalSettings.TmuxAutoAttach);
             InitializeTerminal();
         }
 
@@ -482,14 +498,14 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            double now = EditorApplication.timeSinceStartup;
+            var now = EditorApplication.timeSinceStartup;
             if ((now - _lastPollTime) * 1000d < PollIntervalMs)
             {
                 return;
             }
 
             _lastPollTime = now;
-            bool hadOutput = false;
+            var hadOutput = false;
 
             _shellProcess.DrainOutput(data =>
             {
@@ -517,8 +533,8 @@ namespace Linalab.Terminal.Editor
 
             if (_needsResize && _terminalSurface != null)
             {
-                int newCols = Mathf.Max(1, _terminalSurface.VisibleCols);
-                int newRows = Mathf.Max(1, _terminalSurface.VisibleRows);
+                var newCols = Mathf.Max(1, _terminalSurface.VisibleCols);
+                var newRows = Mathf.Max(1, _terminalSurface.VisibleRows);
 
                 if (!HasUsableShellSize(newCols, newRows))
                 {
@@ -547,8 +563,8 @@ namespace Linalab.Terminal.Editor
             // in the same frame without waiting for the next OnEditorUpdate cycle.
             if (_buffer != null && _terminalSurface != null)
             {
-                int newCols = Mathf.Max(1, _terminalSurface.VisibleCols);
-                int newRows = Mathf.Max(1, _terminalSurface.VisibleRows);
+                var newCols = Mathf.Max(1, _terminalSurface.VisibleCols);
+                var newRows = Mathf.Max(1, _terminalSurface.VisibleRows);
                 if (newCols != _buffer.Cols || newRows != _buffer.Rows)
                 {
                     _buffer.Resize(newRows, newCols);
@@ -565,7 +581,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            string effectiveFontFamily = TerminalSettings.GetEffectiveFontFamily();
+            var effectiveFontFamily = TerminalSettings.GetEffectiveFontFamily();
             if (_lastAppliedFontSize == TerminalSettings.FontSize
                 && string.Equals(_lastAppliedEffectiveFontFamily, effectiveFontFamily, System.StringComparison.Ordinal))
             {
@@ -626,8 +642,8 @@ namespace Linalab.Terminal.Editor
             GUILayout.Label(_terminalFocused ? "Focused" : "Click terminal to focus", EditorStyles.miniLabel);
             GUILayout.EndHorizontal();
 
-            bool shellNull = _shellProcess == null;
-            bool shellRunning = !shellNull && _shellProcess.IsRunning;
+            var shellNull = _shellProcess == null;
+            var shellRunning = !shellNull && _shellProcess.IsRunning;
             if (shellNull || !shellRunning)
             {
                 StartShell();
@@ -648,7 +664,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            bool isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.command : evt.control;
+            var isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.command : evt.control;
             if (isCommandModifier && evt.keyCode == KeyCode.C && _terminalSurface != null && _terminalSurface.HasSelection)
             {
                 EditorGUIUtility.systemCopyBuffer = _terminalSurface.GetSelectedText();
@@ -676,7 +692,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            string translated = TerminalInputHandler.TranslateKeyEvent(evt);
+            var translated = TerminalInputHandler.TranslateKeyEvent(evt);
             if (translated == null)
             {
                 return;
@@ -752,7 +768,7 @@ namespace Linalab.Terminal.Editor
 
             LogEventCharacter("sink-keydown-raw", evt.character, evt.keyCode.ToString());
 
-            bool isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.commandKey : evt.ctrlKey;
+            var isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.commandKey : evt.ctrlKey;
             if (isCommandModifier && evt.keyCode == KeyCode.C && _terminalSurface != null && _terminalSurface.HasSelection)
             {
                 EditorGUIUtility.systemCopyBuffer = _terminalSurface.GetSelectedText();
@@ -773,7 +789,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            string translated = TerminalInputHandler.TranslateKeyEvent(evt.character, evt.keyCode, evt.ctrlKey, evt.shiftKey, Input.compositionString);
+            var translated = TerminalInputHandler.TranslateKeyEvent(evt.character, evt.keyCode, evt.ctrlKey, evt.shiftKey, Input.compositionString);
             if (translated == null)
             {
                 return;
@@ -804,8 +820,8 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            string sanitizedNewValue = SanitizeCommittedText(evt.newValue);
-            string committedText = ExtractCommittedText(_lastTextInputSinkValue, sanitizedNewValue);
+            var sanitizedNewValue = SanitizeCommittedText(evt.newValue);
+            var committedText = ExtractCommittedText(_lastTextInputSinkValue, sanitizedNewValue);
             committedText = SanitizeCommittedText(committedText);
             if (string.IsNullOrEmpty(committedText))
             {
@@ -820,7 +836,7 @@ namespace Linalab.Terminal.Editor
 
         void HandlePasteInput(string source)
         {
-            string paste = TerminalInputHandler.GetPasteText();
+            var paste = TerminalInputHandler.GetPasteText();
             if (string.IsNullOrEmpty(paste))
             {
                 return;
@@ -850,7 +866,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            string sanitizedText = SanitizeCommittedText(text);
+            var sanitizedText = SanitizeCommittedText(text);
             VerboseLog($"[TerminalInput] source={source} raw={DescribeText(text)} sanitized={DescribeText(sanitizedText)}");
             if (string.IsNullOrEmpty(sanitizedText))
             {
@@ -894,7 +910,7 @@ namespace Linalab.Terminal.Editor
 
             var builder = new System.Text.StringBuilder();
             builder.Append('[');
-            for (int i = 0; i < text.Length; i++)
+            for (var i = 0; i < text.Length; i++)
             {
                 if (i > 0)
                 {
@@ -913,8 +929,8 @@ namespace Linalab.Terminal.Editor
 
         static string ExtractCommittedText(string previousValue, string newValue)
         {
-            string previous = previousValue ?? string.Empty;
-            string current = newValue ?? string.Empty;
+            var previous = previousValue ?? string.Empty;
+            var current = newValue ?? string.Empty;
             if (current.Length == 0)
             {
                 return string.Empty;
@@ -925,8 +941,8 @@ namespace Linalab.Terminal.Editor
                 return current.Substring(previous.Length);
             }
 
-            int commonLength = 0;
-            int maxCommonLength = Mathf.Min(previous.Length, current.Length);
+            var commonLength = 0;
+            var maxCommonLength = Mathf.Min(previous.Length, current.Length);
             while (commonLength < maxCommonLength && previous[commonLength] == current[commonLength])
             {
                 commonLength++;
@@ -1019,8 +1035,8 @@ namespace Linalab.Terminal.Editor
 
         bool ShouldSuppressImmediateDuplicateWrite(string translated)
         {
-            double now = EditorApplication.timeSinceStartup;
-            bool isImmediateDuplicate = string.Equals(_lastWrittenSequence, translated, System.StringComparison.Ordinal)
+            var now = EditorApplication.timeSinceStartup;
+            var isImmediateDuplicate = string.Equals(_lastWrittenSequence, translated, System.StringComparison.Ordinal)
                 && now - _lastWriteTime <= 0.03d;
 
             _lastWrittenSequence = translated;
@@ -1064,13 +1080,13 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            string projectRoot = TerminalSettings.GetProjectRootDirectory();
-            int cols = DefaultCols;
-            int rows = DefaultRows;
+            var projectRoot = TerminalSettings.GetProjectRootDirectory();
+            var cols = DefaultCols;
+            var rows = DefaultRows;
             if (_terminalSurface != null)
             {
-                int candidateCols = Mathf.Max(1, _terminalSurface.VisibleCols);
-                int candidateRows = Mathf.Max(1, _terminalSurface.VisibleRows);
+                var candidateCols = Mathf.Max(1, _terminalSurface.VisibleCols);
+                var candidateRows = Mathf.Max(1, _terminalSurface.VisibleRows);
                 if (HasUsableShellSize(candidateCols, candidateRows))
                 {
                     cols = candidateCols;
@@ -1105,21 +1121,21 @@ namespace Linalab.Terminal.Editor
                 return "buffer=null";
             }
 
-            int rows = Mathf.Min(3, _buffer.Rows);
-            int cols = Mathf.Min(40, _buffer.Cols);
+            var rows = Mathf.Min(3, _buffer.Rows);
+            var cols = Mathf.Min(40, _buffer.Cols);
             var parts = new System.Text.StringBuilder();
 
-            for (int row = 0; row < rows; row++)
+            for (var row = 0; row < rows; row++)
             {
                 if (row > 0)
                 {
                     parts.Append(" | ");
                 }
 
-                for (int col = 0; col < cols; col++)
+                for (var col = 0; col < cols; col++)
                 {
                     var cell = _buffer.GetCell(row, col);
-                    char ch = cell.Codepoint == '\0' ? '·' : cell.Codepoint;
+                    var ch = cell.Codepoint == '\0' ? '·' : cell.Codepoint;
                     parts.Append(ch == ' ' ? '␠' : ch);
                 }
             }

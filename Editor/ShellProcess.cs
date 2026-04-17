@@ -688,12 +688,30 @@ namespace Linalab.Terminal.Editor
 
         static string CreatePseudoTerminalArguments(string shellPath)
         {
+            var innerCommand = BuildPseudoTerminalInnerCommand(shellPath);
+
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                return $"-q /dev/null {QuoteArgument(shellPath)} {GetShellArguments(shellPath)}".Trim();
+                return $"-q /dev/null {innerCommand}".Trim();
             }
 
-            return $"-q -c {QuoteArgument($"{shellPath} {GetShellArguments(shellPath)}".Trim())} /dev/null";
+            return $"-q -c {QuoteArgument(innerCommand)} /dev/null";
+        }
+
+        static string BuildPseudoTerminalInnerCommand(string shellPath)
+        {
+            if (TerminalSettings.TmuxAutoAttach && CommandExists("tmux"))
+            {
+                string sessionName = TerminalSettings.GetTmuxSessionName();
+                return $"tmux new-session -A -s {QuoteArgument(sessionName)}";
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                return $"{QuoteArgument(shellPath)} {GetShellArguments(shellPath)}".Trim();
+            }
+
+            return $"{shellPath} {GetShellArguments(shellPath)}".Trim();
         }
 
         static string GetShellArguments(string shellPath)

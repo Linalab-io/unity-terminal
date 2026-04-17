@@ -53,7 +53,7 @@ namespace Linalab.Terminal.Editor.Tests
                     parser.Feed(data);
                 });
 
-                string snapshot = combined.ToString();
+                var snapshot = combined.ToString();
                 if (snapshot.Contains(plainMarker, StringComparison.Ordinal)
                     && snapshot.Contains(colorMarker, StringComparison.Ordinal))
                 {
@@ -63,18 +63,18 @@ namespace Linalab.Terminal.Editor.Tests
                 Thread.Sleep(50);
             }
 
-            string output = combined.ToString();
+            var output = combined.ToString();
             Assert.That(output, Does.Contain(plainMarker));
             Assert.That(output, Does.Contain(colorMarker));
 
-            string line1 = ReadLine(buffer, 0, 80);
-            string line2 = ReadLine(buffer, 1, 80);
-            string line3 = ReadLine(buffer, 2, 80);
+            var line1 = ReadLine(buffer, 0, 80);
+            var line2 = ReadLine(buffer, 1, 80);
+            var line3 = ReadLine(buffer, 2, 80);
 
-            bool bufferHasPlainMarker = line1.Contains(plainMarker, StringComparison.Ordinal)
+            var bufferHasPlainMarker = line1.Contains(plainMarker, StringComparison.Ordinal)
                 || line2.Contains(plainMarker, StringComparison.Ordinal)
                 || line3.Contains(plainMarker, StringComparison.Ordinal);
-            bool bufferHasColorMarker = line1.Contains(colorMarker, StringComparison.Ordinal)
+            var bufferHasColorMarker = line1.Contains(colorMarker, StringComparison.Ordinal)
                 || line2.Contains(colorMarker, StringComparison.Ordinal)
                 || line3.Contains(colorMarker, StringComparison.Ordinal);
 
@@ -125,7 +125,7 @@ namespace Linalab.Terminal.Editor.Tests
             parser.Feed("\x1b[0 q");
             parser.Feed("after");
 
-            string line = ReadLine(buffer, 0, 40);
+            var line = ReadLine(buffer, 0, 40);
             Assert.That(line, Is.EqualTo("beforeafter"));
             Assert.That(line, Does.Not.Contain("1u"));
             Assert.That(line, Does.Not.Contain("4;2m"));
@@ -299,26 +299,26 @@ namespace Linalab.Terminal.Editor.Tests
         public void TerminalInputHandler_EncodesLegacyMouseRelease()
         {
             var cell = new Vector2Int(4, 1);
-            string encoded = TerminalInputHandler.TranslateMouseButtonEvent(TerminalMouseEncoding.Default, cell, 0, false, false, false, isRelease: true, isMotion: false);
-            string expected = string.Concat("\x1b[M", ((char)(3 + 32)).ToString(), ((char)(5 + 32)).ToString(), ((char)(2 + 32)).ToString());
+            var encoded = TerminalInputHandler.TranslateMouseButtonEvent(TerminalMouseEncoding.Default, cell, 0, false, false, false, isRelease: true, isMotion: false);
+            var expected = string.Concat("\x1b[M", ((char)(3 + 32)).ToString(), ((char)(5 + 32)).ToString(), ((char)(2 + 32)).ToString());
             Assert.That(encoded, Is.EqualTo(expected));
         }
 
         [Test]
         public void TerminalSettings_TogglesVerboseLogging_AndPersistsValue()
         {
-            bool original = TerminalSettings.VerboseLogging;
+            var original = TerminalSettings.VerboseLogging;
 
             try
             {
                 TerminalSettings.VerboseLogging = false;
                 Assert.That(TerminalSettings.VerboseLogging, Is.False);
 
-                bool toggledOn = TerminalSettings.ToggleVerboseLogging();
+                var toggledOn = TerminalSettings.ToggleVerboseLogging();
                 Assert.That(toggledOn, Is.True);
                 Assert.That(TerminalSettings.VerboseLogging, Is.True);
 
-                bool toggledOff = TerminalSettings.ToggleVerboseLogging();
+                var toggledOff = TerminalSettings.ToggleVerboseLogging();
                 Assert.That(toggledOff, Is.False);
                 Assert.That(TerminalSettings.VerboseLogging, Is.False);
             }
@@ -328,9 +328,56 @@ namespace Linalab.Terminal.Editor.Tests
             }
         }
 
+        [Test]
+        public void TerminalSettings_TogglesTmuxAutoAttach_AndPersistsValue()
+        {
+            var original = TerminalSettings.TmuxAutoAttach;
+
+            try
+            {
+                TerminalSettings.TmuxAutoAttach = false;
+                Assert.That(TerminalSettings.TmuxAutoAttach, Is.False);
+
+                var toggledOn = TerminalSettings.ToggleTmuxAutoAttach();
+                Assert.That(toggledOn, Is.True);
+                Assert.That(TerminalSettings.TmuxAutoAttach, Is.True);
+
+                var toggledOff = TerminalSettings.ToggleTmuxAutoAttach();
+                Assert.That(toggledOff, Is.False);
+                Assert.That(TerminalSettings.TmuxAutoAttach, Is.False);
+            }
+            finally
+            {
+                TerminalSettings.TmuxAutoAttach = original;
+            }
+        }
+
+        [Test]
+        public void TerminalSettings_BuildsStableTmuxSessionName_FromProjectRoot()
+        {
+            string first = TerminalSettings.BuildTmuxSessionName("/Users/me/projects/MyGame");
+            string second = TerminalSettings.BuildTmuxSessionName("/Users/me/projects/MyGame");
+            string differentRoot = TerminalSettings.BuildTmuxSessionName("/Users/me/projects/OtherGame");
+
+            Assert.That(first, Is.EqualTo(second), "session name should be deterministic");
+            Assert.That(first, Does.StartWith("MyGame-"));
+            Assert.That(first, Does.Not.Contain("."));
+            Assert.That(first, Does.Not.Contain(":"));
+            Assert.That(first, Does.Not.Contain(" "));
+            Assert.That(first, Is.Not.EqualTo(differentRoot));
+        }
+
+        [Test]
+        public void TerminalSettings_BuildsFallbackTmuxSessionName_ForEmptyRoot()
+        {
+            string name = TerminalSettings.BuildTmuxSessionName(string.Empty);
+            Assert.That(name, Does.StartWith("unity-terminal-"));
+            Assert.That(name, Does.Not.Contain("."));
+        }
+
         static void WriteText(TerminalBuffer buffer, string text)
         {
-            foreach (char ch in text)
+            foreach (var ch in text)
             {
                 buffer.PutChar(ch);
             }
@@ -339,7 +386,7 @@ namespace Linalab.Terminal.Editor.Tests
         static string ReadLine(TerminalBuffer buffer, int row, int cols)
         {
             var builder = new StringBuilder(cols);
-            for (int col = 0; col < cols; col++)
+            for (var col = 0; col < cols; col++)
             {
                 var cell = buffer.GetCell(row, col);
                 builder.Append(cell.Codepoint == '\0' ? ' ' : cell.Codepoint);

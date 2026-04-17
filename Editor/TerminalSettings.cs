@@ -23,6 +23,7 @@ namespace Linalab.Terminal.Editor
         const string ShellPathOverrideKey = Prefix + "ShellPathOverride";
         const string CursorBlinkRateKey = Prefix + "CursorBlinkRate";
         const string VerboseLoggingKey = Prefix + "VerboseLogging";
+        const string TmuxAutoAttachKey = Prefix + "TmuxAutoAttach";
 
         public static int FontSize
         {
@@ -38,13 +39,13 @@ namespace Linalab.Terminal.Editor
 
         public static string GetEffectiveFontFamily()
         {
-            string fontFamily = FontFamily;
+            var fontFamily = FontFamily;
             if (!string.IsNullOrWhiteSpace(fontFamily))
             {
                 return fontFamily;
             }
 
-            string ghosttyFontFamily = TerminalThemeResolver.GetGhosttyFontFamily();
+            var ghosttyFontFamily = TerminalThemeResolver.GetGhosttyFontFamily();
             if (!string.IsNullOrWhiteSpace(ghosttyFontFamily))
             {
                 return ghosttyFontFamily;
@@ -94,6 +95,84 @@ namespace Linalab.Terminal.Editor
             return VerboseLogging;
         }
 
+        public static bool TmuxAutoAttach
+        {
+            get => EditorPrefs.GetBool(TmuxAutoAttachKey, false);
+            set => EditorPrefs.SetBool(TmuxAutoAttachKey, value);
+        }
+
+        public static bool ToggleTmuxAutoAttach()
+        {
+            TmuxAutoAttach = !TmuxAutoAttach;
+            return TmuxAutoAttach;
+        }
+
+        public static string GetTmuxSessionName()
+        {
+            return BuildTmuxSessionName(GetProjectRootDirectory());
+        }
+
+        public static string BuildTmuxSessionName(string projectRoot)
+        {
+            string normalized = string.IsNullOrWhiteSpace(projectRoot)
+                ? string.Empty
+                : NormalizeDirectoryPath(projectRoot);
+
+            string directoryName = string.IsNullOrEmpty(normalized)
+                ? string.Empty
+                : new DirectoryInfo(normalized).Name;
+
+            string sanitized = SanitizeTmuxSessionName(directoryName);
+            string hash = ComputeStableWorkspaceHash(normalized);
+            if (string.IsNullOrEmpty(sanitized))
+            {
+                return "unity-terminal-" + hash;
+            }
+
+            return sanitized + "-" + hash;
+        }
+
+        static string SanitizeTmuxSessionName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+            {
+                return string.Empty;
+            }
+
+            var builder = new System.Text.StringBuilder(name.Length);
+            foreach (char c in name)
+            {
+                if (char.IsLetterOrDigit(c) || c == '-' || c == '_')
+                {
+                    builder.Append(c);
+                }
+                else
+                {
+                    builder.Append('_');
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        static string ComputeStableWorkspaceHash(string input)
+        {
+            if (string.IsNullOrEmpty(input))
+            {
+                return "0";
+            }
+
+            ulong hash = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            foreach (char c in input)
+            {
+                hash ^= c;
+                hash *= prime;
+            }
+
+            return (hash & 0x7FFFFFFFUL).ToString("x8", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         public static string ResolveShellPath()
         {
             return ShellProfile switch
@@ -107,8 +186,8 @@ namespace Linalab.Terminal.Editor
 
         public static string GetProjectRootDirectory()
         {
-            string applicationDataDirectory = NormalizeDirectoryPath(Path.GetDirectoryName(Path.GetFullPath(Application.dataPath)));
-            string dataPathRoot = FindUnityWorkspaceRoot(applicationDataDirectory);
+            var applicationDataDirectory = NormalizeDirectoryPath(Path.GetDirectoryName(Path.GetFullPath(Application.dataPath)));
+            var dataPathRoot = FindUnityWorkspaceRoot(applicationDataDirectory);
             if (!string.IsNullOrWhiteSpace(dataPathRoot))
             {
                 return dataPathRoot;
@@ -124,10 +203,10 @@ namespace Linalab.Terminal.Editor
 
         static string InferFontFamilyFromZsh()
         {
-            string zshrcPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".zshrc");
+            var zshrcPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".zshrc");
             if (File.Exists(zshrcPath))
             {
-                string zshrc = File.ReadAllText(zshrcPath);
+                var zshrc = File.ReadAllText(zshrcPath);
                 if (zshrc.Contains("oh-my-posh", StringComparison.OrdinalIgnoreCase)
                     || zshrc.Contains("powerlevel", StringComparison.OrdinalIgnoreCase)
                     || zshrc.Contains("nerd font", StringComparison.OrdinalIgnoreCase))
@@ -141,13 +220,13 @@ namespace Linalab.Terminal.Editor
 
         static string FindUnityWorkspaceRoot(string startDirectory)
         {
-            string normalizedStartDirectory = NormalizeDirectoryPath(startDirectory);
+            var normalizedStartDirectory = NormalizeDirectoryPath(startDirectory);
             if (string.IsNullOrWhiteSpace(normalizedStartDirectory))
             {
                 return string.Empty;
             }
 
-            for (DirectoryInfo directory = new DirectoryInfo(normalizedStartDirectory); directory != null; directory = directory.Parent)
+            for (var directory = new DirectoryInfo(normalizedStartDirectory); directory != null; directory = directory.Parent)
             {
                 if (IsUnityWorkspaceRoot(directory.FullName))
                 {
