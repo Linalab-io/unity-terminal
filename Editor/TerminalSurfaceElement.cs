@@ -9,6 +9,7 @@ namespace Linalab.Terminal.Editor
     sealed class TerminalSurfaceElement : IMGUIContainer
     {
         readonly ITerminalBuffer _buffer;
+        AnsiParser _parser;
 
         GUIStyle _cellStyle;
         GUIStyle _boldCellStyle;
@@ -36,11 +37,13 @@ namespace Linalab.Terminal.Editor
 
         public event System.Action OnGridSizeChanged;
         public event System.Action<Event> OnInputRequested;
+        public event System.Action<string> OnMouseInputRequested;
         public event System.Action OnInteractionStarted;
 
-        public TerminalSurfaceElement(ITerminalBuffer buffer)
+        public TerminalSurfaceElement(ITerminalBuffer buffer, AnsiParser parser)
         {
             _buffer = buffer;
+            _parser = parser;
             onGUIHandler = DrawImmediateGui;
             focusable = true;
             tabIndex = 0;
@@ -56,6 +59,11 @@ namespace Linalab.Terminal.Editor
             style.overflow = Overflow.Hidden;
             RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
             RegisterCallback<MouseDownEvent>(OnMouseDownEvent);
+        }
+
+        public void SetMouseProtocolSource(AnsiParser parser)
+        {
+            _parser = parser;
         }
 
         void OnMouseDownEvent(MouseDownEvent evt)
@@ -222,7 +230,8 @@ namespace Linalab.Terminal.Editor
 
             TerminalTheme theme = TerminalThemeResolver.GetCurrentTheme();
             Color backgroundColor = Opaque(theme.DefaultBackground);
-            EditorGUI.DrawRect(new Rect(0, 0, contentRect.width, contentRect.height), backgroundColor);
+            var layout = BuildGridLayout();
+            EditorGUI.DrawRect(new Rect(0f, 0f, layout.TotalWidth, layout.TotalHeight), backgroundColor);
 
             int rows = Mathf.Min(VisibleRows, _buffer.Rows);
             int cols = Mathf.Min(VisibleCols, _buffer.Cols);
@@ -236,12 +245,12 @@ namespace Linalab.Terminal.Editor
 
             for (int row = 0; row < rows; row++)
             {
-                DrawRow(row, cols, theme);
+                DrawRow(row, cols, theme, backgroundColor, layout);
             }
 
             if (_scrollbackOffset == 0)
             {
-                DrawCursor(theme);
+                DrawCursor(theme, layout);
             }
 
             GUI.EndClip();
@@ -250,6 +259,11 @@ namespace Linalab.Terminal.Editor
         void HandleSurfaceEvent(Event evt)
         {
             if (evt == null)
+            {
+                return;
+            }
+
+            if (TryHandleMousePassthrough(evt))
             {
                 return;
             }
@@ -326,6 +340,169 @@ namespace Linalab.Terminal.Editor
             }
         }
 
+        bool TryHandleMousePassthrough(Event evt)
+        {
+            if (_parser == null || !_parser.IsMouseReportingEnabled)
+            {
+                return false;
+            }
+
+            switch (evt.type)
+            {
+                case EventType.MouseDown:
+                    if (TryTranslateMouseButtonEvent(evt, isRelease: false, isMotion: false, out var pressSequence))
+                    {
+                        ClearSelection();
+                        OnInteractionStarted?.Invoke();
+                        GUIUtility.keyboardControl = _keyboardControlId;
+                        Focus();
+                        OnMouseInputRequested?.Invoke(pressSequence);
+                        evt.Use();
+                        return true;
+                    }
+
+                    return false;
+
+                case EventType.MouseDrag:
+                    if (!_parser.IsMouseReportingEnabled || _parser.MouseTrackingMode == TerminalMouseTrackingMode.ButtonPress)
+                    {
+                        return false;
+                    }
+
+                    if (TryTranslateMouseMotionEvent(evt, out var dragSequence))
+                    {
+                        OnMouseInputRequested?.Invoke(dragSequence);
+                        evt.Use();
+                        return true;
+                    }
+
+                    return false;
+
+                case EventType.MouseMove:
+                    if (_parser.MouseTrackingMode != TerminalMouseTrackingMode.AnyMotion)
+                    {
+                        return false;
+                    }
+
+                    if (TryTranslateMouseMoveEvent(evt, out var moveSequence))
+                    {
+                        OnMouseInputRequested?.Invoke(moveSequence);
+                        evt.Use();
+                        return true;
+                    }
+
+                    return false;
+
+                case EventType.MouseUp:
+                    if (TryTranslateMouseButtonEvent(evt, isRelease: true, isMotion: false, out var releaseSequence))
+                    {
+                        OnMouseInputRequested?.Invoke(releaseSequence);
+                        evt.Use();
+                        return true;
+                    }
+
+                    return false;
+
+                case EventType.ScrollWheel:
+                    if (TryTranslateScrollEvent(evt, out var scrollSequence))
+                    {
+                        OnMouseInputRequested?.Invoke(scrollSequence);
+                        evt.Use();
+                        return true;
+                    }
+
+                    return false;
+
+                default:
+                    return false;
+            }
+        }
+
+        bool TryTranslateMouseButtonEvent(Event evt, bool isRelease, bool isMotion, out string sequence)
+        {
+            sequence = null;
+            if (evt.button is < 0 or > 2)
+            {
+                return false;
+            }
+
+            if (!TryGetMouseCellPosition(evt, allowClamp: isRelease || isMotion, out var cell))
+            {
+                return false;
+            }
+
+            sequence = TerminalInputHandler.TranslateMouseButtonEvent(
+                _parser.MouseEncoding,
+                cell,
+                evt.button,
+                evt.shift,
+                evt.alt,
+                evt.control,
+                isRelease,
+                isMotion);
+            return !string.IsNullOrEmpty(sequence);
+        }
+
+        bool TryTranslateMouseMotionEvent(Event evt, out string sequence)
+        {
+            sequence = null;
+            return TryTranslateMouseButtonEvent(evt, isRelease: false, isMotion: true, out sequence);
+        }
+
+        bool TryTranslateMouseMoveEvent(Event evt, out string sequence)
+        {
+            sequence = null;
+            if (!TryGetMouseCellPosition(evt, allowClamp: true, out var cell))
+            {
+                return false;
+            }
+
+            sequence = TerminalInputHandler.TranslateMouseMoveEvent(
+                _parser.MouseEncoding,
+                cell,
+                evt.shift,
+                evt.alt,
+                evt.control);
+            return !string.IsNullOrEmpty(sequence);
+        }
+
+        bool TryTranslateScrollEvent(Event evt, out string sequence)
+        {
+            sequence = null;
+            if (!TryGetMouseCellPosition(evt, allowClamp: true, out var cell))
+            {
+                return false;
+            }
+
+            bool scrollUp = evt.delta.y < 0f;
+            sequence = TerminalInputHandler.TranslateMouseScrollEvent(
+                _parser.MouseEncoding,
+                cell,
+                evt.shift,
+                evt.alt,
+                evt.control,
+                scrollUp);
+            return !string.IsNullOrEmpty(sequence);
+        }
+
+        bool TryGetMouseCellPosition(Event evt, bool allowClamp, out Vector2Int cell)
+        {
+            cell = default;
+            if (evt == null || contentRect.width < 1f || contentRect.height < 1f)
+            {
+                return false;
+            }
+
+            Vector2 localPos = evt.mousePosition - contentRect.position;
+            if (!allowClamp)
+            {
+                return contentRect.Contains(evt.mousePosition) && TryGetCellPosition(localPos, out cell);
+            }
+
+            localPos = ClampToContentRect(localPos);
+            return TryGetCellPosition(localPos, out cell);
+        }
+
         void EnsureStyle()
         {
             if (_cellStyle != null && _cachedFont != null && _cachedFontSize == TerminalSettings.FontSize)
@@ -369,7 +546,7 @@ namespace Linalab.Terminal.Editor
             _cellHeight = Mathf.Max(1f, measuredHeight);
         }
 
-        void DrawRow(int row, int cols, TerminalTheme theme)
+        void DrawRow(int row, int cols, TerminalTheme theme, Color defaultBackground, GridLayout layout)
         {
             int displayRow = row;
             bool isScrollback = false;
@@ -415,15 +592,11 @@ namespace Linalab.Terminal.Editor
 
                 if (isContinuation)
                 {
-                    FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+                    FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
                     continue;
                 }
 
-                var cellRect = new Rect(
-                    col * CellWidth,
-                    row * CellHeight,
-                    GetCellDrawWidth(isScrollback, scrollbackRow, displayRow, col, cols),
-                    CellHeight);
+                Rect cellRect = GetCellRect(layout, col, row, GetCellDisplayWidth(isScrollback, scrollbackRow, displayRow, col, cols));
 
                 Color bgColor = Opaque(cell.Background.ToUnityColor(theme.Palette, theme.DefaultBackground));
                 Color fgColor = Opaque(cell.Foreground.ToUnityColor(theme.Palette, theme.DefaultForeground));
@@ -452,7 +625,7 @@ namespace Linalab.Terminal.Editor
                     fgColor = Color.white;
                 }
 
-                if (bgColor != theme.DefaultBackground)
+                if (bgColor != defaultBackground)
                 {
                     EditorGUI.DrawRect(cellRect, bgColor);
                 }
@@ -460,8 +633,8 @@ namespace Linalab.Terminal.Editor
                 char displayCharacter = cell.Codepoint;
                 if (isWideLead)
                 {
-                    FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
-                    DrawTextRun(row, col, displayCharacter.ToString(), 2, cell.Flags, fgColor);
+                    FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+                    DrawTextRun(layout, row, col, displayCharacter.ToString(), 2, cell.Flags, fgColor);
                     continue;
                 }
 
@@ -476,7 +649,7 @@ namespace Linalab.Terminal.Editor
                 }
                 else if (runForeground != fgColor || runFlags != cell.Flags)
                 {
-                    FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+                    FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
                     hasRun = true;
                     runStartCol = col;
                     runDisplayWidth = 0;
@@ -488,7 +661,7 @@ namespace Linalab.Terminal.Editor
                 runDisplayWidth += 1;
             }
 
-            FlushTextRun(row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+            FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
         }
 
         bool SelectionContains(int row, int col)
@@ -522,37 +695,33 @@ namespace Linalab.Terminal.Editor
             return true;
         }
 
-        void DrawTextRun(int row, int startCol, string text, int displayWidth, CellFlags flags, Color foreground)
+        void DrawTextRun(GridLayout layout, int row, int startCol, string text, int displayWidth, CellFlags flags, Color foreground)
         {
             if (string.IsNullOrEmpty(text) || displayWidth <= 0)
             {
                 return;
             }
 
-            var runRect = new Rect(
-                startCol * CellWidth,
-                row * CellHeight,
-                displayWidth * CellWidth,
-                CellHeight);
+            Rect runRect = GetCellRect(layout, startCol, row, displayWidth);
 
             GUI.Label(runRect, text, GetModifiedStyle(flags, foreground));
         }
 
-        void FlushTextRun(int row, ref bool hasRun, ref int runStartCol, ref int runDisplayWidth, StringBuilder runBuilder, ref CellFlags runFlags, ref Color runForeground)
+        void FlushTextRun(GridLayout layout, int row, ref bool hasRun, ref int runStartCol, ref int runDisplayWidth, StringBuilder runBuilder, ref CellFlags runFlags, ref Color runForeground)
         {
             if (!hasRun)
             {
                 return;
             }
 
-            DrawTextRun(row, runStartCol, runBuilder.ToString(), runDisplayWidth, runFlags, runForeground);
+            DrawTextRun(layout, row, runStartCol, runBuilder.ToString(), runDisplayWidth, runFlags, runForeground);
             hasRun = false;
             runStartCol = 0;
             runDisplayWidth = 0;
             runBuilder.Clear();
         }
 
-        void DrawCursor(TerminalTheme theme)
+        void DrawCursor(TerminalTheme theme, GridLayout layout)
         {
             var cursor = _buffer.Cursor;
             if (!cursor.Visible || !_cursorVisible)
@@ -581,11 +750,7 @@ namespace Linalab.Terminal.Editor
                 cell = _buffer.GetCell(cursor.Row, leadCol);
             }
 
-            var cursorRect = new Rect(
-                anchorCol * CellWidth,
-                cursor.Row * CellHeight,
-                cursorWidth * CellWidth,
-                CellHeight);
+            Rect cursorRect = GetCellRect(layout, anchorCol, cursor.Row, cursorWidth);
 
             EditorGUI.DrawRect(cursorRect, Opaque(theme.CursorColor));
 
@@ -645,6 +810,73 @@ namespace Linalab.Terminal.Editor
         float GetCellDrawWidth(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
         {
             return CellWidth * GetCellDisplayWidth(isScrollback, scrollbackRow, displayRow, col, cols);
+        }
+
+        readonly struct GridLayout
+        {
+            public readonly float TotalWidth;
+            public readonly float TotalHeight;
+            readonly float[] _columnEdges;
+            readonly float[] _rowEdges;
+
+            public GridLayout(float totalWidth, float totalHeight, float[] columnEdges, float[] rowEdges)
+            {
+                TotalWidth = totalWidth;
+                TotalHeight = totalHeight;
+                _columnEdges = columnEdges;
+                _rowEdges = rowEdges;
+            }
+
+            public Rect GetCellRect(int col, int row, int displayWidth)
+            {
+                int clampedCol = Mathf.Clamp(col, 0, Mathf.Max(0, _columnEdges.Length - 2));
+                int endCol = Mathf.Clamp(clampedCol + Mathf.Max(1, displayWidth), clampedCol + 1, _columnEdges.Length - 1);
+                int clampedRow = Mathf.Clamp(row, 0, Mathf.Max(0, _rowEdges.Length - 2));
+                float xMin = _columnEdges[clampedCol];
+                float xMax = _columnEdges[endCol];
+                float yMin = _rowEdges[clampedRow];
+                float yMax = _rowEdges[clampedRow + 1];
+                return Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+            }
+        }
+
+        GridLayout BuildGridLayout()
+        {
+            int cols = Mathf.Max(1, VisibleCols);
+            int rows = Mathf.Max(1, VisibleRows);
+            float totalWidth = SnapToPixel(contentRect.width);
+            float totalHeight = SnapToPixel(contentRect.height);
+            var columnEdges = BuildSnappedEdges(cols, totalWidth);
+            var rowEdges = BuildSnappedEdges(rows, totalHeight);
+            return new GridLayout(totalWidth, totalHeight, columnEdges, rowEdges);
+        }
+
+        static float[] BuildSnappedEdges(int divisions, float totalSize)
+        {
+            var edges = new float[divisions + 1];
+            for (int i = 0; i <= divisions; i++)
+            {
+                float normalized = divisions == 0 ? 0f : (float)i / divisions;
+                edges[i] = i == divisions ? totalSize : SnapToPixel(totalSize * normalized);
+            }
+
+            return edges;
+        }
+
+        Rect GetCellRect(GridLayout layout, int col, int row, int displayWidth)
+        {
+            return layout.GetCellRect(col, row, displayWidth);
+        }
+
+        static float SnapToPixel(float value)
+        {
+            float pixelsPerPoint = EditorGUIUtility.pixelsPerPoint;
+            if (pixelsPerPoint <= 0f)
+            {
+                return value;
+            }
+
+            return Mathf.Round(value * pixelsPerPoint) / pixelsPerPoint;
         }
 
         int GetCellDisplayWidth(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)

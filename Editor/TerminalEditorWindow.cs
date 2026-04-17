@@ -54,6 +54,7 @@ namespace Linalab.Terminal.Editor
             var window = GetWindow<TerminalEditorWindow>();
             window.titleContent = new GUIContent("Unity Terminal", EditorGUIUtility.IconContent("d_UnityEditor.ConsoleWindow").image);
             window.minSize = new Vector2(400f, 240f);
+            window.wantsMouseMove = true;
             window.Show();
         }
 
@@ -106,6 +107,8 @@ namespace Linalab.Terminal.Editor
             }
 
             rootVisualElement.RegisterCallback<MouseDownEvent>(OnRootMouseDown, TrickleDown.TrickleDown);
+            rootVisualElement.RegisterCallback<ValidateCommandEvent>(OnRootValidateCommand, TrickleDown.TrickleDown);
+            rootVisualElement.RegisterCallback<ExecuteCommandEvent>(OnRootExecuteCommand, TrickleDown.TrickleDown);
             _rootInputCallbacksRegistered = true;
         }
 
@@ -143,6 +146,9 @@ namespace Linalab.Terminal.Editor
                     paddingBottom = 6f
                 }
             };
+            // Let the terminal surface receive pointer input directly instead of
+            // resolving the parent container as the hit target.
+            _surfaceContainer.pickingMode = PickingMode.Ignore;
             rootVisualElement.Add(_surfaceContainer);
         }
 
@@ -202,9 +208,10 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            _terminalSurface = new TerminalSurfaceElement(_buffer);
+            _terminalSurface = new TerminalSurfaceElement(_buffer, _parser);
             _terminalSurface.OnGridSizeChanged += OnGridSizeChanged;
             _terminalSurface.OnInputRequested += HandleKeyInput;
+            _terminalSurface.OnMouseInputRequested += HandleMouseInput;
             _terminalSurface.OnInteractionStarted += OnSurfaceInteractionStarted;
             _terminalSurface.RegisterCallback<FocusInEvent>(OnSurfaceFocusIn);
             _terminalSurface.RegisterCallback<FocusOutEvent>(OnSurfaceFocusOut);
@@ -272,6 +279,7 @@ namespace Linalab.Terminal.Editor
 
         void OnEnable()
         {
+            wantsMouseMove = true;
             InitializeTerminal();
         }
 
@@ -359,6 +367,27 @@ namespace Linalab.Terminal.Editor
             _terminalSurface.MarkDirtyRepaint();
         }
 
+        void OnRootValidateCommand(ValidateCommandEvent evt)
+        {
+            if (evt == null || !_terminalFocused || !TerminalInputHandler.IsPasteCommand(evt.commandName))
+            {
+                return;
+            }
+
+            evt.StopImmediatePropagation();
+        }
+
+        void OnRootExecuteCommand(ExecuteCommandEvent evt)
+        {
+            if (evt == null || !_terminalFocused || !TerminalInputHandler.IsPasteCommand(evt.commandName))
+            {
+                return;
+            }
+
+            HandlePasteInput("root-paste-command");
+            evt.StopImmediatePropagation();
+        }
+
         void InitializeTerminal()
         {
             if (_initialized)
@@ -405,6 +434,7 @@ namespace Linalab.Terminal.Editor
             _buffer = s_sharedSession.Buffer;
             _parser = s_sharedSession.Parser;
             _shellProcess = s_sharedSession.ShellProcess;
+            _terminalSurface?.SetMouseProtocolSource(_parser);
         }
 
         static void DisposeSharedSession()
@@ -618,15 +648,9 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            if (isCommandModifier && evt.keyCode == KeyCode.V)
+            if (TerminalInputHandler.IsPrimaryPasteShortcut(Application.platform, evt.keyCode, evt.command, evt.control))
             {
-                string paste = TerminalInputHandler.GetPasteText();
-                if (!string.IsNullOrEmpty(paste))
-                {
-                    WriteUserInputToShell(paste, "surface-paste");
-                    _terminalSurface?.ScrollToBottom();
-                }
-
+                HandlePasteInput("surface-paste");
                 evt.Use();
                 return;
             }
@@ -776,6 +800,31 @@ namespace Linalab.Terminal.Editor
             WriteUserInputToShell(committedText, "sink-value-changed");
             _terminalSurface?.ScrollToBottom();
             _lastTextInputSinkValue = sanitizedNewValue;
+        }
+
+        void HandlePasteInput(string source)
+        {
+            string paste = TerminalInputHandler.GetPasteText();
+            if (string.IsNullOrEmpty(paste))
+            {
+                return;
+            }
+
+            WriteUserInputToShell(paste, source);
+            _terminalSurface?.ScrollToBottom();
+
+            if (_textInputSink == null)
+            {
+                return;
+            }
+
+            _textInputSink.SetValueWithoutNotify(string.Empty);
+            _lastTextInputSinkValue = string.Empty;
+        }
+
+        void HandleMouseInput(string sequence)
+        {
+            WriteUserInputToShell(sequence, "surface-mouse");
         }
 
         void WriteUserInputToShell(string text, string source)
@@ -971,6 +1020,7 @@ namespace Linalab.Terminal.Editor
             _shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
             _parser = new AnsiParser(_buffer);
             _parser.ResponseCallback = response => _shellProcess?.Write(response);
+            _terminalSurface?.SetMouseProtocolSource(_parser);
             s_sharedSession = new TerminalRuntimeSession
             {
                 Buffer = _buffer,
@@ -1096,6 +1146,8 @@ namespace Linalab.Terminal.Editor
             if (rootVisualElement != null && _rootInputCallbacksRegistered)
             {
                 rootVisualElement.UnregisterCallback<MouseDownEvent>(OnRootMouseDown, TrickleDown.TrickleDown);
+                rootVisualElement.UnregisterCallback<ValidateCommandEvent>(OnRootValidateCommand, TrickleDown.TrickleDown);
+                rootVisualElement.UnregisterCallback<ExecuteCommandEvent>(OnRootExecuteCommand, TrickleDown.TrickleDown);
             }
 
             _shellProcess = null;
