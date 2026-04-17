@@ -25,7 +25,7 @@ namespace Linalab.Terminal.Editor
 
         static void DrawGui()
         {
-            string projectRoot = TerminalSettings.GetProjectRootDirectory();
+            var projectRoot = TerminalSettings.GetProjectRootDirectory();
 
             EditorGUILayout.LabelField("Shell", EditorStyles.boldLabel);
             TerminalSettings.ShellProfile = (TerminalShellProfile)EditorGUILayout.EnumPopup("Shell Profile", TerminalSettings.ShellProfile);
@@ -48,6 +48,10 @@ namespace Linalab.Terminal.Editor
             TerminalSettings.FontSize = EditorGUILayout.IntSlider("Font Size", TerminalSettings.FontSize, 8, 32);
             TerminalSettings.ScrollbackLimit = EditorGUILayout.IntField("Scrollback Limit", TerminalSettings.ScrollbackLimit);
             TerminalSettings.CursorBlinkRate = EditorGUILayout.Slider("Cursor Blink Rate", TerminalSettings.CursorBlinkRate, 0.1f, 2f);
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Diagnostics", EditorStyles.boldLabel);
+            TerminalSettings.VerboseLogging = EditorGUILayout.Toggle("Verbose Logging", TerminalSettings.VerboseLogging);
         }
     }
 }

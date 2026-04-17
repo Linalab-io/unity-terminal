@@ -304,6 +304,30 @@ namespace Linalab.Terminal.Editor.Tests
             Assert.That(encoded, Is.EqualTo(expected));
         }
 
+        [Test]
+        public void TerminalSettings_TogglesVerboseLogging_AndPersistsValue()
+        {
+            bool original = TerminalSettings.VerboseLogging;
+
+            try
+            {
+                TerminalSettings.VerboseLogging = false;
+                Assert.That(TerminalSettings.VerboseLogging, Is.False);
+
+                bool toggledOn = TerminalSettings.ToggleVerboseLogging();
+                Assert.That(toggledOn, Is.True);
+                Assert.That(TerminalSettings.VerboseLogging, Is.True);
+
+                bool toggledOff = TerminalSettings.ToggleVerboseLogging();
+                Assert.That(toggledOff, Is.False);
+                Assert.That(TerminalSettings.VerboseLogging, Is.False);
+            }
+            finally
+            {
+                TerminalSettings.VerboseLogging = original;
+            }
+        }
+
         static void WriteText(TerminalBuffer buffer, string text)
         {
             foreach (char ch in text)

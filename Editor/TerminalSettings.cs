@@ -22,6 +22,7 @@ namespace Linalab.Terminal.Editor
         const string ShellProfileKey = Prefix + "ShellProfile";
         const string ShellPathOverrideKey = Prefix + "ShellPathOverride";
         const string CursorBlinkRateKey = Prefix + "CursorBlinkRate";
+        const string VerboseLoggingKey = Prefix + "VerboseLogging";
 
         public static int FontSize
         {
@@ -79,6 +80,18 @@ namespace Linalab.Terminal.Editor
         {
             get => EditorPrefs.GetFloat(CursorBlinkRateKey, 0.53f);
             set => EditorPrefs.SetFloat(CursorBlinkRateKey, Mathf.Clamp(value, 0.1f, 2f));
+        }
+
+        public static bool VerboseLogging
+        {
+            get => EditorPrefs.GetBool(VerboseLoggingKey, false);
+            set => EditorPrefs.SetBool(VerboseLoggingKey, value);
+        }
+
+        public static bool ToggleVerboseLogging()
+        {
+            VerboseLogging = !VerboseLogging;
+            return VerboseLogging;
         }
 
         public static string ResolveShellPath()
