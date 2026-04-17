@@ -1,0 +1,22 @@
+{
+  "name": "Linalab.Terminal.Tests.Editor",
+  "rootNamespace": "Linalab.Terminal.Editor.Tests",
+  "references": [
+    "nunit.framework",
+    "Linalab.Terminal.Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
