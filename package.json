@@ -5,19 +5,19 @@
   "description": "Standalone IMGUI-based terminal tool for the Unity Editor.",
   "unity": "6000.0",
   "author": {
-    "name": "islee23520",
-    "url": "https://github.com/islee23520/unity-editor-terminal"
+    "name": "LinaLab.io",
+    "url": "https://github.com/Linalab-io"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/islee23520/unity-editor-terminal.git"
+    "url": "https://github.com/Linalab-io/unity-terminal.git"
   },
   "dependencies": {
     "com.linalab.unity-log": "0.0.1"
   },
-  "documentationUrl": "https://github.com/islee23520/unity-editor-terminal",
-  "changelogUrl": "https://github.com/islee23520/unity-editor-terminal/releases",
-  "licensesUrl": "https://github.com/islee23520/unity-editor-terminal/blob/main/LICENSE",
+  "documentationUrl": "https://github.com/Linalab-io/unity-terminal",
+  "changelogUrl": "https://github.com/Linalab-io/unity-terminal/releases",
+  "licensesUrl": "https://github.com/Linalab-io/unity-terminal/blob/main/LICENSE",
   "keywords": [
     "unity",
     "editor",
