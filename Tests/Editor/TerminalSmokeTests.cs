@@ -11,75 +11,85 @@ namespace Linalab.Terminal.Editor.Tests
         [Test]
         public void ShellProcess_ParsesShellOutput_IntoTerminalBuffer()
         {
-            var buffer = new TerminalBuffer(24, 80, 200);
-            var parser = new AnsiParser(buffer);
-            using var shell = new ShellProcess(ShellProcess.DetectShell());
-            parser.ResponseCallback = response => shell.Write(response);
+            bool originalTmuxAutoAttach = TerminalSettings.TmuxAutoAttach;
+            TerminalSettings.TmuxAutoAttach = false;
 
-            shell.Start(Application.dataPath.Replace("/Assets", string.Empty), 80, 24);
-            Assert.That(shell.IsRunning, Is.True, "Shell process should start for smoke test.");
-
-            const string plainMarker = "TERM_SMOKE_OK_123";
-            const string colorMarker = "RED_MARKER_456";
-
-            shell.Write($"printf '{plainMarker}\\r\\n'");
-            shell.Write("\n");
-            shell.Write($"printf '\\033[31m{colorMarker}\\033[0m\\r\\n'");
-            shell.Write("\n");
-
-            var combined = new StringBuilder();
-            var deadline = DateTime.UtcNow.AddSeconds(8);
-            while (DateTime.UtcNow < deadline)
+            try
             {
-                shell.DrainOutput(data =>
+                var buffer = new TerminalBuffer(24, 80, 200);
+                var parser = new AnsiParser(buffer);
+                using var shell = new ShellProcess(ShellProcess.DetectShell());
+                parser.ResponseCallback = response => shell.Write(response);
+
+                shell.Start(Application.dataPath.Replace("/Assets", string.Empty), 80, 24);
+                Assert.That(shell.IsRunning, Is.True, "Shell process should start for smoke test.");
+
+                const string plainMarker = "TERM_SMOKE_OK_123";
+                const string colorMarker = "RED_MARKER_456";
+
+                shell.Write($"printf '{plainMarker}\\r\\n'");
+                shell.Write("\n");
+                shell.Write($"printf '\\033[31m{colorMarker}\\033[0m\\r\\n'");
+                shell.Write("\n");
+
+                var combined = new StringBuilder();
+                var deadline = DateTime.UtcNow.AddSeconds(8);
+                while (DateTime.UtcNow < deadline)
                 {
-                    if (string.IsNullOrEmpty(data))
+                    shell.DrainOutput(data =>
                     {
-                        return;
+                        if (string.IsNullOrEmpty(data))
+                        {
+                            return;
+                        }
+
+                        combined.Append(data);
+                        parser.Feed(data);
+                    });
+
+                    shell.DrainErrors(data =>
+                    {
+                        if (string.IsNullOrEmpty(data))
+                        {
+                            return;
+                        }
+
+                        combined.Append(data);
+                        parser.Feed(data);
+                    });
+
+                    var snapshot = combined.ToString();
+                    if (snapshot.Contains(plainMarker, StringComparison.Ordinal)
+                        && snapshot.Contains(colorMarker, StringComparison.Ordinal))
+                    {
+                        break;
                     }
 
-                    combined.Append(data);
-                    parser.Feed(data);
-                });
-
-                shell.DrainErrors(data =>
-                {
-                    if (string.IsNullOrEmpty(data))
-                    {
-                        return;
-                    }
-
-                    combined.Append(data);
-                    parser.Feed(data);
-                });
-
-                var snapshot = combined.ToString();
-                if (snapshot.Contains(plainMarker, StringComparison.Ordinal)
-                    && snapshot.Contains(colorMarker, StringComparison.Ordinal))
-                {
-                    break;
+                    Thread.Sleep(50);
                 }
 
-                Thread.Sleep(50);
+                var output = combined.ToString();
+                Assert.That(output, Does.Contain(plainMarker));
+                Assert.That(output, Does.Contain(colorMarker));
+
+                var line1 = ReadLine(buffer, 0, 80);
+                var line2 = ReadLine(buffer, 1, 80);
+                var line3 = ReadLine(buffer, 2, 80);
+
+                var bufferHasPlainMarker = line1.Contains(plainMarker, StringComparison.Ordinal)
+                    || line2.Contains(plainMarker, StringComparison.Ordinal)
+                    || line3.Contains(plainMarker, StringComparison.Ordinal);
+                var bufferHasColorMarker = line1.Contains(colorMarker, StringComparison.Ordinal)
+                    || line2.Contains(colorMarker, StringComparison.Ordinal)
+                    || line3.Contains(colorMarker, StringComparison.Ordinal);
+
+                Assert.That(bufferHasPlainMarker, Is.True, $"Expected buffer lines to include {plainMarker}, but got: '{line1}' | '{line2}' | '{line3}'");
+                Assert.That(bufferHasColorMarker, Is.True, $"Expected buffer lines to include {colorMarker}, but got: '{line1}' | '{line2}' | '{line3}'");
             }
-
-            var output = combined.ToString();
-            Assert.That(output, Does.Contain(plainMarker));
-            Assert.That(output, Does.Contain(colorMarker));
-
-            var line1 = ReadLine(buffer, 0, 80);
-            var line2 = ReadLine(buffer, 1, 80);
-            var line3 = ReadLine(buffer, 2, 80);
-
-            var bufferHasPlainMarker = line1.Contains(plainMarker, StringComparison.Ordinal)
-                || line2.Contains(plainMarker, StringComparison.Ordinal)
-                || line3.Contains(plainMarker, StringComparison.Ordinal);
-            var bufferHasColorMarker = line1.Contains(colorMarker, StringComparison.Ordinal)
-                || line2.Contains(colorMarker, StringComparison.Ordinal)
-                || line3.Contains(colorMarker, StringComparison.Ordinal);
-
-            Assert.That(bufferHasPlainMarker, Is.True, $"Expected buffer lines to include {plainMarker}, but got: '{line1}' | '{line2}' | '{line3}'");
-            Assert.That(bufferHasColorMarker, Is.True, $"Expected buffer lines to include {colorMarker}, but got: '{line1}' | '{line2}' | '{line3}'");
+            finally
+            {
+                TerminalSettings.TmuxAutoAttach = originalTmuxAutoAttach;
+            }
         }
 
         [Test]

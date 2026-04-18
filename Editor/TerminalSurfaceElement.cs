@@ -8,7 +8,8 @@ namespace Linalab.Terminal.Editor
 {
     sealed class TerminalSurfaceElement : IMGUIContainer
     {
-        const string CellMetricProbeCharacters = "MW@#%&_gjy|/\\[]{}()한あ中█\uE0B0\uE0B1\uE0A0";
+        const string CellWidthProbeCharacters = "MW@#%&_gjy|/\\[]{}()";
+        const string CellHeightProbeCharacters = "MW@#%&_gjy|/\\[]{}()한あ中█\uE0B0\uE0B1\uE0A0";
 
         readonly ITerminalBuffer _buffer;
         AnsiParser _parser;
@@ -131,6 +132,43 @@ namespace Linalab.Terminal.Editor
         {
             _scrollbackOffset = 0;
             MarkDirtyRepaint();
+        }
+
+        public bool TryGetCursorRect(out Rect cursorRect)
+        {
+            cursorRect = default;
+            EnsureStyle();
+
+            if (_buffer == null || _scrollbackOffset != 0 || contentRect.width < 1f || contentRect.height < 1f)
+            {
+                return false;
+            }
+
+            UpdateGridSize();
+            var layout = BuildGridLayout();
+            var cursor = _buffer.Cursor;
+            if (!cursor.Visible || cursor.Row < 0 || cursor.Row >= VisibleRows || cursor.Col < 0 || cursor.Col >= VisibleCols)
+            {
+                return false;
+            }
+
+            int anchorCol = cursor.Col;
+            int cursorWidth = 1;
+            var cell = _buffer.GetCell(cursor.Row, cursor.Col);
+            if (IsContinuationCell(cell))
+            {
+                int leadCol = cursor.Col - 1;
+                if (leadCol < 0 || !IsWideLeadCell(false, -1, cursor.Row, leadCol, VisibleCols))
+                {
+                    return false;
+                }
+
+                anchorCol = leadCol;
+                cursorWidth = 2;
+            }
+
+            cursorRect = GetCellRect(layout, anchorCol, cursor.Row, cursorWidth);
+            return true;
         }
 
         public void AdjustScroll(int delta)
@@ -281,7 +319,14 @@ namespace Linalab.Terminal.Editor
 
             if (_scrollbackOffset == 0)
             {
-                DrawCursor(theme, layout);
+                if (!string.IsNullOrEmpty(Input.compositionString))
+                {
+                    DrawCompositionPreview(theme, layout);
+                }
+                else
+                {
+                    DrawCursor(theme, layout);
+                }
             }
 
             GUI.EndClip();
@@ -356,13 +401,20 @@ namespace Linalab.Terminal.Editor
             }
             else if (evt.type == EventType.KeyDown)
             {
-                // Ensure this element has keyboard control when it has focus
-                if (focusController?.focusedElement == this && GUIUtility.keyboardControl != _keyboardControlId)
+                bool hasSurfaceFocus = focusController?.focusedElement == this;
+
+                // Ensure this element has keyboard control only while it is the focused element.
+                if (hasSurfaceFocus && GUIUtility.keyboardControl != _keyboardControlId)
                 {
                     GUIUtility.keyboardControl = _keyboardControlId;
                 }
-                
-                // Process input if we have keyboard control
+
+                if (!hasSurfaceFocus)
+                {
+                    return;
+                }
+
+                // Process input only when the surface is the actively focused element.
                 if (GUIUtility.keyboardControl == _keyboardControlId)
                 {
                     OnInputRequested?.Invoke(evt);
@@ -641,13 +693,19 @@ namespace Linalab.Terminal.Editor
             float maxNormalizedWidth = 0f;
             float maxHeight = Mathf.Max(1f, style.lineHeight);
 
-            for (int i = 0; i < CellMetricProbeCharacters.Length; i++)
+            for (int i = 0; i < CellWidthProbeCharacters.Length; i++)
             {
-                char probeCharacter = CellMetricProbeCharacters[i];
+                char probeCharacter = CellWidthProbeCharacters[i];
                 var probeContent = new GUIContent(probeCharacter.ToString());
                 Vector2 probeSize = style.CalcSize(probeContent);
-                int displayWidth = Mathf.Max(1, GetDisplayWidth(probeCharacter));
-                maxNormalizedWidth = Mathf.Max(maxNormalizedWidth, probeSize.x / displayWidth);
+                maxNormalizedWidth = Mathf.Max(maxNormalizedWidth, probeSize.x);
+            }
+
+            for (int i = 0; i < CellHeightProbeCharacters.Length; i++)
+            {
+                char probeCharacter = CellHeightProbeCharacters[i];
+                var probeContent = new GUIContent(probeCharacter.ToString());
+                Vector2 probeSize = style.CalcSize(probeContent);
                 maxHeight = Mathf.Max(maxHeight, probeSize.y);
             }
 
@@ -831,6 +889,39 @@ namespace Linalab.Terminal.Editor
             runStartCol = 0;
             runDisplayWidth = 0;
             runBuilder.Clear();
+        }
+
+        void DrawCompositionPreview(TerminalTheme theme, GridLayout layout)
+        {
+            string compositionString = Input.compositionString;
+            if (string.IsNullOrEmpty(compositionString))
+            {
+                return;
+            }
+
+            var cursor = _buffer.Cursor;
+            if (cursor.Row < 0 || cursor.Row >= VisibleRows || cursor.Col < 0 || cursor.Col >= VisibleCols)
+            {
+                return;
+            }
+
+            int anchorCol = cursor.Col;
+            int displayWidth = 0;
+            for (int i = 0; i < compositionString.Length; i++)
+            {
+                displayWidth += GetDisplayWidth(compositionString[i]);
+            }
+
+            if (displayWidth <= 0)
+            {
+                return;
+            }
+
+            Rect previewRect = GetCellRect(layout, anchorCol, cursor.Row, displayWidth);
+
+            EditorGUI.DrawRect(previewRect, Opaque(theme.CursorColor));
+
+            GUI.Label(previewRect, compositionString, GetModifiedStyle(CellFlags.None, Opaque(theme.DefaultBackground)));
         }
 
         void DrawCursor(TerminalTheme theme, GridLayout layout)

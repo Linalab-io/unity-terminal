@@ -34,20 +34,23 @@ namespace Linalab.Terminal.Editor
 
         void OnGUI()
         {
-            EditorGUILayout.LabelField("Existing tmux sessions for this workspace", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("How should Unity Terminal handle tmux?", EditorStyles.boldLabel);
             if (!string.IsNullOrEmpty(_canonical))
             {
-                EditorGUILayout.LabelField($"Canonical: {_canonical}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Recommended session for this workspace: {_canonical}", EditorStyles.miniLabel);
             }
             EditorGUILayout.Space();
 
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
             if (_sessions == null || _sessions.Length == 0)
             {
-                EditorGUILayout.HelpBox("No existing tmux sessions for this workspace.", MessageType.Info);
+                EditorGUILayout.HelpBox("No existing tmux sessions were found. Create New starts a new session, or Cancel leaves auto tmux disabled.", MessageType.Info);
             }
             else
             {
+                EditorGUILayout.HelpBox("Attach an existing tmux session, create a new session for this workspace, or cancel enabling auto tmux.", MessageType.None);
+                EditorGUILayout.Space();
+
                 foreach (var session in _sessions)
                 {
                     using (new EditorGUILayout.HorizontalScope())

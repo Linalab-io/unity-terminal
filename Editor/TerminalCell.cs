@@ -168,7 +168,7 @@ namespace Linalab.Terminal.Editor
         }
 
         public static readonly Color FallbackDefaultForeground = FromHex(0xCCCCCC);
-        public static readonly Color FallbackDefaultBackground = FromHex(0x1E1E2E);
+        public static readonly Color FallbackDefaultBackground = FromHex(0x000000);
         public static readonly Color FallbackCursorColor = FromHex(0xF8F8F2);
     }
 }

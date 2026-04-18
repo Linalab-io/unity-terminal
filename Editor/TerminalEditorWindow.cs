@@ -38,6 +38,7 @@ namespace Linalab.Terminal.Editor
         string _lastWrittenSequence;
         string _lastAppliedEffectiveFontFamily;
         string _lastTextInputSinkValue;
+        Vector2 _lastCompositionCursorPosition;
 
         const string TextInputSinkName = "unity-terminal-ime-sink";
 
@@ -49,6 +50,7 @@ namespace Linalab.Terminal.Editor
             public TerminalBuffer Buffer;
             public AnsiParser Parser;
             public ShellProcess ShellProcess;
+            public bool HasStartedShell;
         }
 
         [MenuItem(MenuPath)]
@@ -193,11 +195,10 @@ namespace Linalab.Terminal.Editor
                 isDelayed = false
             };
             _lastTextInputSinkValue = string.Empty;
+            ResetCompositionCursorAnchor();
+            _textInputSink.pickingMode = PickingMode.Ignore;
             _textInputSink.style.position = Position.Absolute;
-            _textInputSink.style.left = -10000f;
-            _textInputSink.style.top = -10000f;
-            _textInputSink.style.width = 1f;
-            _textInputSink.style.height = 1f;
+            MoveTextInputSinkOffscreen();
             _textInputSink.style.opacity = 0f;
             _textInputSink.style.paddingLeft = 0f;
             _textInputSink.style.paddingRight = 0f;
@@ -337,15 +338,27 @@ namespace Linalab.Terminal.Editor
         void OnTextInputSinkFocusIn(FocusInEvent evt)
         {
             Input.imeCompositionMode = IMECompositionMode.On;
+            GUIUtility.keyboardControl = 0;
             _restoreTextInputFocusAfterSubmit = false;
             _terminalFocused = true;
+            if (string.IsNullOrEmpty(Input.compositionString))
+            {
+                ResetTextInputSinkBuffer();
+            }
+
+            UpdateTextInputSinkPlacement();
             _terminalSurface?.MarkDirtyRepaint();
         }
 
         void OnTextInputSinkFocusOut(FocusOutEvent evt)
         {
             Input.imeCompositionMode = IMECompositionMode.Auto;
-            _lastTextInputSinkValue = _textInputSink?.value ?? string.Empty;
+            if (string.IsNullOrEmpty(Input.compositionString))
+            {
+                _lastTextInputSinkValue = _textInputSink?.value ?? string.Empty;
+            }
+
+            ResetCompositionCursorAnchor();
             if (_restoreTextInputFocusAfterSubmit)
             {
                 _restoreTextInputFocusAfterSubmit = false;
@@ -369,7 +382,17 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            _textInputSink.schedule.Execute(() => _textInputSink?.Focus()).StartingIn(0);
+            if (string.IsNullOrEmpty(Input.compositionString))
+            {
+                ResetTextInputSinkBuffer();
+            }
+
+            UpdateTextInputSinkPlacement();
+            _textInputSink.schedule.Execute(() =>
+            {
+                UpdateTextInputSinkPlacement();
+                _textInputSink?.Focus();
+            }).StartingIn(0);
         }
 
         void OnRootMouseDown(MouseDownEvent evt)
@@ -454,7 +477,8 @@ namespace Linalab.Terminal.Editor
                 {
                     Buffer = buffer,
                     Parser = parser,
-                    ShellProcess = shellProcess
+                    ShellProcess = shellProcess,
+                    HasStartedShell = false
                 };
             }
 
@@ -526,6 +550,8 @@ namespace Linalab.Terminal.Editor
                 _terminalSurface?.MarkDirtyRepaint();
             }
 
+            UpdateTextInputSinkPlacement();
+
             if (_needsResize && _terminalSurface != null)
             {
                 var newCols = Mathf.Max(1, _terminalSurface.VisibleCols);
@@ -567,6 +593,7 @@ namespace Linalab.Terminal.Editor
             }
 
             _needsResize = true;
+            UpdateTextInputSinkPlacement();
         }
 
         void RefreshSurfaceStyleIfNeeded()
@@ -587,6 +614,7 @@ namespace Linalab.Terminal.Editor
             _lastAppliedEffectiveFontFamily = effectiveFontFamily;
             _terminalSurface.InvalidateStyle();
             _needsResize = true;
+            UpdateTextInputSinkPlacement();
         }
 
         void DrawToolbar()
@@ -656,9 +684,22 @@ namespace Linalab.Terminal.Editor
 
             var shellNull = _shellProcess == null;
             var shellRunning = !shellNull && _shellProcess.IsRunning;
-            if (shellNull || !shellRunning)
+            if (shellNull)
             {
                 StartShell();
+                return;
+            }
+
+            if (!shellRunning && s_sharedSession != null && !s_sharedSession.HasStartedShell)
+            {
+                StartShell();
+                return;
+            }
+
+            if (!shellRunning)
+            {
+                GUILayout.Space(4f);
+                EditorGUILayout.HelpBox("Terminal session is disconnected. Use Restart to reconnect explicitly.", MessageType.Info);
             }
         }
 
@@ -831,11 +872,14 @@ namespace Linalab.Terminal.Editor
             if (evt == null || string.IsNullOrEmpty(evt.newValue))
             {
                 _lastTextInputSinkValue = SanitizeCommittedText(evt?.newValue);
+                UpdateTextInputSinkPlacement();
                 return;
             }
 
             if (!string.IsNullOrEmpty(Input.compositionString))
             {
+                UpdateTextInputSinkPlacement();
+                _terminalSurface?.MarkDirtyRepaint();
                 return;
             }
 
@@ -850,7 +894,69 @@ namespace Linalab.Terminal.Editor
 
             WriteUserInputToShell(committedText, "sink-value-changed");
             _terminalSurface?.ScrollToBottom();
-            _lastTextInputSinkValue = sanitizedNewValue;
+            ResetTextInputSinkBuffer();
+            UpdateTextInputSinkPlacement();
+        }
+
+        void ResetTextInputSinkBuffer()
+        {
+            if (_textInputSink != null)
+            {
+                _textInputSink.SetValueWithoutNotify(string.Empty);
+            }
+
+            _lastTextInputSinkValue = string.Empty;
+        }
+
+        void MoveTextInputSinkOffscreen()
+        {
+            if (_textInputSink == null)
+            {
+                return;
+            }
+
+            _textInputSink.style.left = -10000f;
+            _textInputSink.style.top = -10000f;
+            _textInputSink.style.width = 1f;
+            _textInputSink.style.height = 1f;
+        }
+
+        void ResetCompositionCursorAnchor()
+        {
+            _lastCompositionCursorPosition = new Vector2(float.NaN, float.NaN);
+        }
+
+        void UpdateTextInputSinkPlacement()
+        {
+            if (_textInputSink == null || _terminalSurface == null || rootVisualElement == null)
+            {
+                return;
+            }
+
+            if (!_terminalSurface.TryGetCursorRect(out var surfaceCursorRect))
+            {
+                MoveTextInputSinkOffscreen();
+                ResetCompositionCursorAnchor();
+                return;
+            }
+
+            Vector2 worldTopLeft = _terminalSurface.LocalToWorld(surfaceCursorRect.position);
+            Vector2 rootLocalTopLeft = rootVisualElement.WorldToLocal(worldTopLeft);
+            float sinkWidth = Mathf.Max(1f, surfaceCursorRect.width);
+            float sinkHeight = Mathf.Max(1f, surfaceCursorRect.height);
+
+            _textInputSink.style.left = rootLocalTopLeft.x;
+            _textInputSink.style.top = rootLocalTopLeft.y;
+            _textInputSink.style.width = sinkWidth;
+            _textInputSink.style.height = sinkHeight;
+
+            Vector2 screenAnchor = GUIUtility.GUIToScreenPoint(new Vector2(worldTopLeft.x, worldTopLeft.y + surfaceCursorRect.height));
+            if (!Mathf.Approximately(_lastCompositionCursorPosition.x, screenAnchor.x)
+                || !Mathf.Approximately(_lastCompositionCursorPosition.y, screenAnchor.y))
+            {
+                _lastCompositionCursorPosition = screenAnchor;
+                Input.compositionCursorPos = screenAnchor;
+            }
         }
 
         void HandlePasteInput(string source)
@@ -1103,7 +1209,8 @@ namespace Linalab.Terminal.Editor
             {
                 Buffer = _buffer,
                 Parser = _parser,
-                ShellProcess = _shellProcess
+                ShellProcess = _shellProcess,
+                HasStartedShell = false
             };
             StartShell();
         }
@@ -1135,6 +1242,10 @@ namespace Linalab.Terminal.Editor
             }
 
             _shellProcess.Start(projectRoot, cols, rows);
+            if (s_sharedSession != null)
+            {
+                s_sharedSession.HasStartedShell = true;
+            }
         }
 
         static bool HasUsableShellSize(int cols, int rows)
@@ -1191,21 +1302,53 @@ namespace Linalab.Terminal.Editor
             if (!enable)
             {
                 TerminalSettings.TmuxAutoAttach = false;
-                RestartShell();
-                return;
-            }
-
-            var canonical = TerminalSettings.GetCanonicalTmuxSessionName();
-            var existing = ShellProcess.ListTmuxWorkspaceSessions(TerminalSettings.GetProjectRootDirectory());
-
-            if (existing == null || existing.Length == 0)
-            {
                 TerminalSettings.TmuxSessionNameOverride = string.Empty;
-                TerminalSettings.TmuxAutoAttach = true;
                 RestartShell();
                 return;
             }
 
+            if (!TryApplyTmuxAutoAttachSelection())
+            {
+                return;
+            }
+
+            RestartShell();
+        }
+
+        internal static void HandleTmuxToggleChangeFromSettings(bool enable)
+        {
+            var openWindow = FindOpenWindow();
+            if (!enable)
+            {
+                TerminalSettings.TmuxAutoAttach = false;
+                TerminalSettings.TmuxSessionNameOverride = string.Empty;
+                openWindow?.RestartShell();
+                return;
+            }
+
+            if (!TryApplyTmuxAutoAttachSelection())
+            {
+                return;
+            }
+
+            openWindow?.RestartShell();
+        }
+
+        static TerminalEditorWindow FindOpenWindow()
+        {
+            var windows = Resources.FindObjectsOfTypeAll<TerminalEditorWindow>();
+            return windows != null && windows.Length > 0 ? windows[0] : null;
+        }
+
+        internal static bool HasOpenWindow()
+        {
+            return FindOpenWindow() != null;
+        }
+
+        static bool TryApplyTmuxAutoAttachSelection()
+        {
+            var canonical = TerminalSettings.GetCanonicalTmuxSessionName();
+            var existing = ShellProcess.ListTmuxSessions() ?? Array.Empty<string>();
             var result = TmuxSessionPicker.ShowModal(existing, canonical, out var selected);
             switch (result)
             {
@@ -1215,8 +1358,7 @@ namespace Linalab.Terminal.Editor
                             ? string.Empty
                             : selected;
                     TerminalSettings.TmuxAutoAttach = true;
-                    RestartShell();
-                    break;
+                    return true;
 
                 case TmuxPickerResult.CreateNew:
                     var newName = ShellProcess.FindUnusedTmuxSessionName(canonical);
@@ -1225,12 +1367,11 @@ namespace Linalab.Terminal.Editor
                             ? string.Empty
                             : newName;
                     TerminalSettings.TmuxAutoAttach = true;
-                    RestartShell();
-                    break;
+                    return true;
 
                 case TmuxPickerResult.Cancel:
                 default:
-                    break;
+                    return false;
             }
         }
 

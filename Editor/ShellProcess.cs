@@ -468,6 +468,7 @@ namespace Linalab.Terminal.Editor
             startInfo.Environment["PYTHONUNBUFFERED"] = "1";
             startInfo.Environment["COLUMNS"] = Math.Max(1, cols).ToString(CultureInfo.InvariantCulture);
             startInfo.Environment["LINES"] = Math.Max(1, rows).ToString(CultureInfo.InvariantCulture);
+            startInfo.Environment.Remove("TMUX");
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists("/usr/bin/script"))
             {
@@ -707,10 +708,17 @@ namespace Linalab.Terminal.Editor
 
         static string BuildPseudoTerminalInnerCommand(string shellPath)
         {
-            if (TerminalSettings.TmuxAutoAttach && CommandExists("tmux"))
+            if (TerminalSettings.TmuxAutoAttach)
             {
-                string sessionName = TerminalSettings.GetTmuxSessionName();
-                return $"tmux new-session -A -s {QuoteArgument(sessionName)}";
+                string tmuxPath = ResolveCommandPath("tmux");
+                if (!string.IsNullOrEmpty(tmuxPath))
+                {
+                    string sessionName = TerminalSettings.GetTmuxSessionName();
+                    string quotedTmuxPath = QuoteShellArgument(tmuxPath);
+                    string quotedSessionName = QuoteShellArgument(sessionName);
+                    string tmuxCommand = $"if {quotedTmuxPath} has-session -t {quotedSessionName} 2>/dev/null; then exec {quotedTmuxPath} attach-session -t {quotedSessionName}; else exec {quotedTmuxPath} new-session -s {quotedSessionName}; fi";
+                    return BuildInteractiveShellCommand(shellPath, tmuxCommand);
+                }
             }
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
@@ -737,6 +745,11 @@ namespace Linalab.Terminal.Editor
             return GetInteractiveShellArguments(shellPath);
         }
 
+        static string BuildInteractiveShellCommand(string shellPath, string command)
+        {
+            return $"{QuoteArgument(shellPath)} {GetShellArguments(shellPath)} -c {QuoteArgument(command)}".Trim();
+        }
+
         static string GetInteractiveShellArguments(string shellPath)
         {
             // Use a plain interactive shell so the user's profile/rc files run and
@@ -754,6 +767,16 @@ namespace Linalab.Terminal.Editor
             return $"\"{value.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
         }
 
+        static string QuoteShellArgument(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "''";
+            }
+
+            return $"'{value.Replace("'", "'\\''")}'";
+        }
+
         static bool CommandExists(string command)
         {
             return !string.IsNullOrEmpty(ResolveCommandPath(command));
@@ -766,6 +789,11 @@ namespace Linalab.Terminal.Editor
                 return null;
             }
 
+            if (Path.IsPathRooted(command) && File.Exists(command))
+            {
+                return command;
+            }
+
             string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
             foreach (string directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
@@ -773,6 +801,24 @@ namespace Linalab.Terminal.Editor
                 if (File.Exists(candidate))
                 {
                     return candidate;
+                }
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                string[] commonMacBinaryDirectories =
+                {
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin"
+                };
+
+                foreach (var directory in commonMacBinaryDirectories)
+                {
+                    var candidate = Path.Combine(directory, command);
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
                 }
             }
 
@@ -787,13 +833,17 @@ namespace Linalab.Terminal.Editor
                 return Array.Empty<string>();
             }
 
-            var names = new string[sessions.Length];
+            var names = new List<string>(sessions.Length);
             for (int i = 0; i < sessions.Length; i++)
             {
-                names[i] = sessions[i].Name;
+                if (!string.IsNullOrWhiteSpace(sessions[i]?.Name))
+                {
+                    names.Add(sessions[i].Name);
+                }
             }
 
-            return names;
+            names.Sort(StringComparer.Ordinal);
+            return names.ToArray();
         }
 
         static TmuxSessionInfo[] ListTmuxSessionInfos()

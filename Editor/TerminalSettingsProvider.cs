@@ -43,11 +43,20 @@ namespace Linalab.Terminal.Editor
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Session", EditorStyles.boldLabel);
-            TerminalSettings.TmuxAutoAttach = EditorGUILayout.Toggle("Tmux Auto Attach", TerminalSettings.TmuxAutoAttach);
+            var tmuxAutoAttach = EditorGUILayout.Toggle("Tmux Auto Attach", TerminalSettings.TmuxAutoAttach);
+            if (tmuxAutoAttach != TerminalSettings.TmuxAutoAttach)
+            {
+                TerminalEditorWindow.HandleTmuxToggleChangeFromSettings(tmuxAutoAttach);
+                GUIUtility.ExitGUI();
+            }
+
             if (TerminalSettings.TmuxAutoAttach)
             {
                 var sessionName = TerminalSettings.GetTmuxSessionName();
-                EditorGUILayout.HelpBox($"Session: {sessionName}\nCommand: tmux new-session -A -s {sessionName}\nRestart the terminal window after changes to apply.", MessageType.Info);
+                var restartMessage = TerminalEditorWindow.HasOpenWindow()
+                    ? "Changes restart the open terminal window automatically."
+                    : "Open or restart the terminal window to apply changes.";
+                EditorGUILayout.HelpBox($"Session: {sessionName}\nRuntime behavior: if tmux session '{sessionName}' exists, Unity Terminal attaches to it; otherwise it creates a new tmux session with that name.\n{restartMessage}", MessageType.Info);
             }
 
             EditorGUILayout.Space();
