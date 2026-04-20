@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -63,6 +65,53 @@ namespace Linalab.Terminal.Editor
         public static string BuildDropInput(string projectRootDirectory, string path)
         {
             return BuildDropInput(projectRootDirectory, new[] { path });
+        }
+
+        public static string GetPasteInput(string projectRootDirectory)
+        {
+            var imageInput = GetClipboardImageDropInput(projectRootDirectory);
+            if (!string.IsNullOrEmpty(imageInput))
+            {
+                return imageInput;
+            }
+
+            return GetPasteText();
+        }
+
+        public static string GetClipboardImageDropInput(string projectRootDirectory)
+        {
+            if (Application.platform != RuntimePlatform.OSXEditor)
+            {
+                return null;
+            }
+
+            if (!HasMacClipboardImage())
+            {
+                return null;
+            }
+
+            try
+            {
+                var tempFilePath = Path.Combine(Path.GetTempPath(), $"unity-terminal-clipboard-{Guid.NewGuid():N}.tiff");
+                if (!TryWriteMacClipboardImage(tempFilePath))
+                {
+                    TryDeleteTempFile(tempFilePath);
+                    return null;
+                }
+
+                var input = BuildDropInput(projectRootDirectory, tempFilePath);
+                if (string.IsNullOrEmpty(input))
+                {
+                    TryDeleteTempFile(tempFilePath);
+                    return null;
+                }
+
+                return input;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         public static string TranslateKeyEvent(char character, KeyCode keyCode, bool control, bool shift, string composition)
@@ -414,6 +463,122 @@ namespace Linalab.Terminal.Editor
             }
 
             return normalizedPath;
+        }
+
+        static bool TryWriteMacClipboardImage(string tempFilePath)
+        {
+            if (string.IsNullOrWhiteSpace(tempFilePath) || !File.Exists("/usr/bin/osascript"))
+            {
+                return false;
+            }
+
+            var escapedPath = tempFilePath.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            var arguments = string.Join(" ", new[]
+            {
+                $"-e \"set outPath to POSIX file \\\"{escapedPath}\\\"\"",
+                "-e \"set imageData to (the clipboard as TIFF picture)\"",
+                "-e \"set fileRef to open for access outPath with write permission\"",
+                "-e \"set eof fileRef to 0\"",
+                "-e \"write imageData to fileRef\"",
+                "-e \"close access fileRef\""
+            });
+
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "/usr/bin/osascript",
+                        Arguments = arguments,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                process.WaitForExit(5000);
+                return process.ExitCode == 0 && File.Exists(tempFilePath);
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        static bool HasMacClipboardImage()
+        {
+            if (!File.Exists("/usr/bin/osascript"))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "/usr/bin/osascript",
+                        Arguments = "-e \"clipboard info\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                var output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit(2000);
+                if (process.ExitCode != 0 || string.IsNullOrEmpty(output))
+                {
+                    return false;
+                }
+
+                return output.Contains("TIFF picture", StringComparison.Ordinal)
+                    || output.Contains("«class PNGf»", StringComparison.Ordinal)
+                    || output.Contains("JPEG picture", StringComparison.Ordinal)
+                    || output.Contains("GIF picture", StringComparison.Ordinal)
+                    || output.Contains("«class BMP »", StringComparison.Ordinal)
+                    || output.Contains("«class AVIF»", StringComparison.Ordinal)
+                    || output.Contains("«class jp2 »", StringComparison.Ordinal)
+                    || output.Contains("«class 8BPS»", StringComparison.Ordinal)
+                    || output.Contains("«class TPIC»", StringComparison.Ordinal);
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        static void TryDeleteTempFile(string tempFilePath)
+        {
+            if (string.IsNullOrWhiteSpace(tempFilePath) || !File.Exists(tempFilePath))
+            {
+                return;
+            }
+
+            try
+            {
+                File.Delete(tempFilePath);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
 
         static string NormalizePath(string path)
