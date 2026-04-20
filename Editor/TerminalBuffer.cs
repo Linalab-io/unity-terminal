@@ -12,6 +12,7 @@ namespace Linalab.Terminal.Editor
         TerminalCell GetCell(int row, int col);
         TerminalCell GetScrollbackCell(int scrollbackRow, int col);
         void PutChar(char c);
+        void InsertBlankCharacters(int count);
         void MoveCursorTo(int row, int col);
         void MoveCursorRelative(int deltaRow, int deltaCol);
         void CarriageReturn();
@@ -31,6 +32,9 @@ namespace Linalab.Terminal.Editor
         void Backspace();
         void SetAttribute(TerminalColor fg, TerminalColor bg, CellFlags flags);
         void ResetAttributes();
+        void SetCursorVisible(bool visible);
+        void SaveCursor();
+        void RestoreCursor();
         void ClearDirty();
     }
 
@@ -51,6 +55,30 @@ namespace Linalab.Terminal.Editor
         int _topMargin;
         int _bottomMargin;
         bool _isDirty;
+        SavedCursor _savedCursor;
+        bool _hasSavedCursor;
+
+        readonly struct SavedCursor
+        {
+            public readonly int Row;
+            public readonly int Col;
+            public readonly bool PendingWrap;
+            public readonly bool Visible;
+            public readonly TerminalColor Foreground;
+            public readonly TerminalColor Background;
+            public readonly CellFlags Flags;
+
+            public SavedCursor(int row, int col, bool pendingWrap, bool visible, TerminalColor foreground, TerminalColor background, CellFlags flags)
+            {
+                Row = row;
+                Col = col;
+                PendingWrap = pendingWrap;
+                Visible = visible;
+                Foreground = foreground;
+                Background = background;
+                Flags = flags;
+            }
+        }
 
         public TerminalBuffer(int rows, int cols, int maxScrollback = 5000)
         {
@@ -437,6 +465,8 @@ namespace Linalab.Terminal.Editor
             _cursor = CursorState.Create();
             ResetAttributesInternal();
             ResetScrollRegionInternal();
+            _hasSavedCursor = false;
+            _savedCursor = default;
             _isDirty = true;
         }
 
@@ -487,6 +517,110 @@ namespace Linalab.Terminal.Editor
             {
                 _isDirty = true;
             }
+        }
+
+        public void SetCursorVisible(bool visible)
+        {
+            if (_cursor.Visible == visible)
+            {
+                return;
+            }
+
+            _cursor.Visible = visible;
+            _isDirty = true;
+        }
+
+        public void SaveCursor()
+        {
+            _savedCursor = new SavedCursor(
+                _cursor.Row,
+                _cursor.Col,
+                _cursor.PendingWrap,
+                _cursor.Visible,
+                _currentForeground,
+                _currentBackground,
+                _currentFlags);
+            _hasSavedCursor = true;
+        }
+
+        public void RestoreCursor()
+        {
+            if (!_hasSavedCursor)
+            {
+                // Per DEC spec, if no prior save, restore moves cursor to home.
+                MoveCursorTo(0, 0);
+                return;
+            }
+
+            int nextRow = Math.Clamp(_savedCursor.Row, 0, Rows - 1);
+            int nextCol = Math.Clamp(_savedCursor.Col, 0, Cols - 1);
+            bool changed = _cursor.Row != nextRow
+                || _cursor.Col != nextCol
+                || _cursor.PendingWrap != _savedCursor.PendingWrap
+                || _cursor.Visible != _savedCursor.Visible
+                || _currentForeground != _savedCursor.Foreground
+                || _currentBackground != _savedCursor.Background
+                || _currentFlags != _savedCursor.Flags;
+
+            _cursor.Row = nextRow;
+            _cursor.Col = nextCol;
+            _cursor.PendingWrap = _savedCursor.PendingWrap;
+            _cursor.Visible = _savedCursor.Visible;
+            _currentForeground = _savedCursor.Foreground;
+            _currentBackground = _savedCursor.Background;
+            _currentFlags = _savedCursor.Flags;
+
+            if (changed)
+            {
+                _isDirty = true;
+            }
+        }
+
+        public void InsertBlankCharacters(int count)
+        {
+            if (count <= 0)
+            {
+                return;
+            }
+
+            int row = _cursor.Row;
+            int startCol = _cursor.Col;
+            if ((uint)row >= (uint)Rows || (uint)startCol >= (uint)Cols)
+            {
+                return;
+            }
+
+            int insertCount = Math.Min(count, Cols - startCol);
+            if (insertCount <= 0)
+            {
+                return;
+            }
+
+            for (int col = Cols - 1; col >= startCol + insertCount; col--)
+            {
+                _grid[row, col] = _grid[row, col - insertCount];
+            }
+
+            var blank = new TerminalCell
+            {
+                Codepoint = ' ',
+                Foreground = _currentForeground,
+                Background = _currentBackground,
+                Flags = _currentFlags
+            };
+            for (int col = startCol; col < startCol + insertCount; col++)
+            {
+                _grid[row, col] = blank;
+            }
+
+            SanitizeBoundaryAt(row, startCol - 1);
+            SanitizeBoundaryAt(row, startCol);
+            SanitizeBoundaryAt(row, startCol + insertCount - 1);
+            SanitizeBoundaryAt(row, startCol + insertCount);
+            SanitizeBoundaryAt(row, Cols - 1);
+
+            _cursor.PendingWrap = false;
+            _isDirty = true;
         }
 
         public void ClearDirty()

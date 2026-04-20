@@ -52,6 +52,10 @@ namespace Linalab.Terminal.Editor
             focusable = true;
             tabIndex = 0;
             pickingMode = PickingMode.Position;
+            // Editor UI Toolkit panels multiply all children by a dim/desaturated
+            // "play mode tint" while EditorApplication.isPlaying is true. Opting
+            // out keeps ANSI colors true to their palette hex in Play Mode too.
+            disablePlayModeTint = true;
             style.flexGrow = 1;
             style.flexShrink = 1;
             style.flexBasis = 0f;
@@ -294,42 +298,65 @@ namespace Linalab.Terminal.Editor
 
             UpdateGridSize();
 
+            // UI Toolkit's IMGUIContainer does not reliably reset the IMGUI
+            // global tint state before invoking onGUIHandler: the host editor
+            // panel's dark-theme tint leaks into GUI.color/backgroundColor/
+            // contentColor. EditorGUI.DrawRect internally multiplies by
+            // GUI.color, so any non-white residual tint silently darkens every
+            // palette color we pass in. Force-reset the trio for the duration
+            // of our draw so ANSI palette hex values reach the backbuffer
+            // unmodified.
+            var savedGuiColor = GUI.color;
+            var savedBackgroundColor = GUI.backgroundColor;
+            var savedContentColor = GUI.contentColor;
+            GUI.color = Color.white;
+            GUI.backgroundColor = Color.white;
+            GUI.contentColor = Color.white;
+
             var clipRect = contentRect;
             GUI.BeginClip(clipRect);
 
-            TerminalTheme theme = TerminalThemeResolver.GetCurrentTheme();
-            Color backgroundColor = Opaque(theme.DefaultBackground);
-            var layout = BuildGridLayout();
-            EditorGUI.DrawRect(new Rect(0f, 0f, layout.TotalWidth, layout.TotalHeight), backgroundColor);
-
-            int rows = Mathf.Min(VisibleRows, _buffer.Rows);
-            int cols = Mathf.Min(VisibleCols, _buffer.Cols);
-
-            double now = EditorApplication.timeSinceStartup;
-            if (now - _lastBlinkToggle > TerminalSettings.CursorBlinkRate)
+            try
             {
-                _cursorVisible = !_cursorVisible;
-                _lastBlinkToggle = now;
-            }
+                TerminalTheme theme = TerminalThemeResolver.GetCurrentTheme();
+                Color backgroundColor = Opaque(theme.DefaultBackground);
+                var layout = BuildGridLayout();
+                EditorGUI.DrawRect(new Rect(0f, 0f, layout.TotalWidth, layout.TotalHeight), backgroundColor);
 
-            for (int row = 0; row < rows; row++)
-            {
-                DrawRow(row, cols, theme, backgroundColor, layout);
-            }
+                int rows = Mathf.Min(VisibleRows, _buffer.Rows);
+                int cols = Mathf.Min(VisibleCols, _buffer.Cols);
 
-            if (_scrollbackOffset == 0)
-            {
-                if (!string.IsNullOrEmpty(Input.compositionString))
+                double now = EditorApplication.timeSinceStartup;
+                if (now - _lastBlinkToggle > TerminalSettings.CursorBlinkRate)
                 {
-                    DrawCompositionPreview(theme, layout);
+                    _cursorVisible = !_cursorVisible;
+                    _lastBlinkToggle = now;
                 }
-                else
+
+                for (int row = 0; row < rows; row++)
                 {
-                    DrawCursor(theme, layout);
+                    DrawRow(row, cols, theme, backgroundColor, layout);
+                }
+
+                if (_scrollbackOffset == 0)
+                {
+                    if (!string.IsNullOrEmpty(Input.compositionString))
+                    {
+                        DrawCompositionPreview(theme, layout);
+                    }
+                    else
+                    {
+                        DrawCursor(theme, layout);
+                    }
                 }
             }
-
-            GUI.EndClip();
+            finally
+            {
+                GUI.EndClip();
+                GUI.color = savedGuiColor;
+                GUI.backgroundColor = savedBackgroundColor;
+                GUI.contentColor = savedContentColor;
+            }
         }
 
         void HandleSurfaceEvent(Event evt)
@@ -744,13 +771,6 @@ namespace Linalab.Terminal.Editor
                 }
             }
 
-            var runBuilder = new StringBuilder(cols);
-            int runStartCol = 0;
-            int runDisplayWidth = 0;
-            Color runForeground = Opaque(theme.DefaultForeground);
-            CellFlags runFlags = CellFlags.None;
-            bool hasRun = false;
-
             for (int col = 0; col < cols; col++)
             {
                 TerminalCell cell = isScrollback
@@ -758,22 +778,22 @@ namespace Linalab.Terminal.Editor
                     : _buffer.GetCell(displayRow, col);
 
                 bool isContinuation = cell.Codepoint == '\0';
-                bool isWideLead = !isContinuation && GetCellDisplayWidth(isScrollback, scrollbackRow, displayRow, col, cols) > 1;
-
                 if (isContinuation)
                 {
-                    FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
                     continue;
                 }
 
-                Rect cellRect = GetCellRect(layout, col, row, GetCellDisplayWidth(isScrollback, scrollbackRow, displayRow, col, cols));
+                int displayWidth = GetCellDisplayWidth(isScrollback, scrollbackRow, displayRow, col, cols);
+                bool isWideLead = displayWidth > 1;
+                Rect cellRect = GetCellRect(layout, col, row, displayWidth);
 
+                bool bold = (cell.Flags & CellFlags.Bold) != 0;
                 Color bgColor = Opaque(cell.Background.ToUnityColor(theme.Palette, theme.DefaultBackground));
-                Color fgColor = Opaque(cell.Foreground.ToUnityColor(theme.Palette, theme.DefaultForeground));
+                Color fgColor = Opaque(ResolveForegroundWithBoldBright(cell.Foreground, bold, theme));
                 if ((cell.Flags & CellFlags.Inverse) != 0)
                 {
                     fgColor = Opaque(cell.Background.ToUnityColor(theme.Palette, theme.DefaultBackground));
-                    bgColor = Opaque(cell.Foreground.ToUnityColor(theme.Palette, theme.DefaultForeground));
+                    bgColor = Opaque(ResolveForegroundWithBoldBright(cell.Foreground, bold, theme));
                 }
 
                 if ((cell.Flags & CellFlags.Dim) != 0)
@@ -800,38 +820,24 @@ namespace Linalab.Terminal.Editor
                     EditorGUI.DrawRect(cellRect, bgColor);
                 }
 
-                char displayCharacter = cell.Codepoint;
-                if (isWideLead)
+                if (cell.Codepoint == ' ')
                 {
-                    FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
-                    DrawTextRun(layout, row, col, displayCharacter.ToString(), 2, cell.Flags, fgColor);
                     continue;
                 }
 
-                if (!hasRun)
-                {
-                    hasRun = true;
-                    runStartCol = col;
-                    runDisplayWidth = 0;
-                    runForeground = fgColor;
-                    runFlags = cell.Flags;
-                    runBuilder.Clear();
-                }
-                else if (runForeground != fgColor || runFlags != cell.Flags)
-                {
-                    FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
-                    hasRun = true;
-                    runStartCol = col;
-                    runDisplayWidth = 0;
-                    runForeground = fgColor;
-                    runFlags = cell.Flags;
-                }
+                GUI.Label(cellRect, cell.Codepoint.ToString(), GetModifiedStyle(cell.Flags, fgColor));
+            }
+        }
 
-                runBuilder.Append(displayCharacter);
-                runDisplayWidth += 1;
+        static Color ResolveForegroundWithBoldBright(TerminalColor foreground, bool bold, TerminalTheme theme)
+        {
+            if (bold && foreground.ColorKind == TerminalColor.Kind.Named && foreground.R < 8)
+            {
+                byte brightIndex = (byte)(foreground.R + 8);
+                return TerminalColor.Named(brightIndex).ToUnityColor(theme.Palette, theme.DefaultForeground);
             }
 
-            FlushTextRun(layout, row, ref hasRun, ref runStartCol, ref runDisplayWidth, runBuilder, ref runFlags, ref runForeground);
+            return foreground.ToUnityColor(theme.Palette, theme.DefaultForeground);
         }
 
         bool SelectionContains(int row, int col)
@@ -863,32 +869,6 @@ namespace Linalab.Terminal.Editor
             }
 
             return true;
-        }
-
-        void DrawTextRun(GridLayout layout, int row, int startCol, string text, int displayWidth, CellFlags flags, Color foreground)
-        {
-            if (string.IsNullOrEmpty(text) || displayWidth <= 0)
-            {
-                return;
-            }
-
-            Rect runRect = GetCellRect(layout, startCol, row, displayWidth);
-
-            GUI.Label(runRect, text, GetModifiedStyle(flags, foreground));
-        }
-
-        void FlushTextRun(GridLayout layout, int row, ref bool hasRun, ref int runStartCol, ref int runDisplayWidth, StringBuilder runBuilder, ref CellFlags runFlags, ref Color runForeground)
-        {
-            if (!hasRun)
-            {
-                return;
-            }
-
-            DrawTextRun(layout, row, runStartCol, runBuilder.ToString(), runDisplayWidth, runFlags, runForeground);
-            hasRun = false;
-            runStartCol = 0;
-            runDisplayWidth = 0;
-            runBuilder.Clear();
         }
 
         void DrawCompositionPreview(TerminalTheme theme, GridLayout layout)

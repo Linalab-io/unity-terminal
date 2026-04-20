@@ -29,6 +29,10 @@ namespace Linalab.Terminal.Editor
         TerminalColor _foreground = TerminalColor.DefaultColor;
         TerminalColor _background = TerminalColor.DefaultColor;
         CellFlags _flags = CellFlags.None;
+        TerminalColor _savedForeground = TerminalColor.DefaultColor;
+        TerminalColor _savedBackground = TerminalColor.DefaultColor;
+        CellFlags _savedFlags = CellFlags.None;
+        bool _hasSavedPen;
         bool _mouseTrackingPress;
         bool _mouseTrackingDrag;
         bool _mouseTrackingAnyMotion;
@@ -200,7 +204,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            if (character is '(' or ')' or '*' or '+' or '-' or '.' or '/')
+            if (character is '(' or ')' or '*' or '+' or '-' or '.' or '/' or '#' or ' ')
             {
                 _state = ParserState.EscapeIntermediate;
                 return;
@@ -220,6 +224,17 @@ namespace Linalab.Terminal.Editor
                     break;
                 case 'c':
                     FullReset();
+                    break;
+                case '7':
+                    SavePenState();
+                    _buffer.SaveCursor();
+                    break;
+                case '8':
+                    _buffer.RestoreCursor();
+                    RestorePenState();
+                    break;
+                case '=':
+                case '>':
                     break;
             }
 
@@ -258,7 +273,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            if (character == ';')
+            if (character == ';' || character == ':')
             {
                 CommitParameter();
                 return;
@@ -298,6 +313,9 @@ namespace Linalab.Terminal.Editor
 
             switch (finalByte)
             {
+                case '@':
+                    _buffer.InsertBlankCharacters(GetPositiveParameter(0, 1));
+                    break;
                 case 'A':
                     _buffer.MoveCursorRelative(-GetPositiveParameter(0, 1), 0);
                     break;
@@ -332,8 +350,17 @@ namespace Linalab.Terminal.Editor
                 case 'P':
                     DeleteCharacters(GetPositiveParameter(0, 1));
                     break;
+                case 'S':
+                    _buffer.ScrollUp(GetPositiveParameter(0, 1));
+                    break;
+                case 'T':
+                    _buffer.ScrollDown(GetPositiveParameter(0, 1));
+                    break;
                 case 'X':
                     EraseCharacters(GetPositiveParameter(0, 1));
+                    break;
+                case 'c':
+                    DispatchDeviceAttributes();
                     break;
                 case 'd':
                     _buffer.MoveCursorTo(GetPositiveParameter(0, 1) - 1, _buffer.Cursor.Col);
@@ -344,7 +371,61 @@ namespace Linalab.Terminal.Editor
                 case 'n':
                     DispatchDeviceStatusReport();
                     break;
+                case 'r':
+                    DispatchSetScrollRegion();
+                    break;
+                case 's':
+                    SavePenState();
+                    _buffer.SaveCursor();
+                    break;
+                case 'u':
+                    _buffer.RestoreCursor();
+                    RestorePenState();
+                    break;
             }
+        }
+
+        void DispatchSetScrollRegion()
+        {
+            int rows = _buffer.Rows;
+            if (rows <= 0)
+            {
+                return;
+            }
+
+            int top = GetPositiveParameter(0, 1) - 1;
+            int bottom = GetPositiveParameter(1, rows) - 1;
+
+            if (top < 0)
+            {
+                top = 0;
+            }
+
+            if (bottom >= rows)
+            {
+                bottom = rows - 1;
+            }
+
+            if (top == 0 && bottom == rows - 1)
+            {
+                _buffer.ResetScrollRegion();
+            }
+            else if (top < bottom)
+            {
+                _buffer.SetScrollRegion(top, bottom);
+            }
+
+            _buffer.MoveCursorTo(0, 0);
+        }
+
+        void DispatchDeviceAttributes()
+        {
+            if (_privateMarker != '\0')
+            {
+                return;
+            }
+
+            ResponseCallback?.Invoke("\x1b[?1;2c");
         }
 
         void DispatchPrivateCsi(char finalByte)
@@ -371,6 +452,18 @@ namespace Linalab.Terminal.Editor
                 int parameter = GetModeParameter(i, -1);
                 switch (parameter)
                 {
+                    case 1:
+                    case 7:
+                    case 12:
+                    case 2004:
+                        break;
+                    case 25:
+                        _buffer.SetCursorVisible(enabled.Value);
+                        break;
+                    case 47:
+                    case 1047:
+                    case 1049:
+                        break;
                     case 1000:
                         _mouseTrackingPress = enabled.Value;
                         break;
@@ -635,6 +728,27 @@ namespace Linalab.Terminal.Editor
             _foreground = TerminalColor.DefaultColor;
             _background = TerminalColor.DefaultColor;
             _flags = CellFlags.None;
+        }
+
+        void SavePenState()
+        {
+            _savedForeground = _foreground;
+            _savedBackground = _background;
+            _savedFlags = _flags;
+            _hasSavedPen = true;
+        }
+
+        void RestorePenState()
+        {
+            if (!_hasSavedPen)
+            {
+                ResetPen();
+                return;
+            }
+
+            _foreground = _savedForeground;
+            _background = _savedBackground;
+            _flags = _savedFlags;
         }
 
         void CommitParameter()

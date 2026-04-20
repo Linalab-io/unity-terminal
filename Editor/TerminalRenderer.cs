@@ -389,12 +389,13 @@ namespace Linalab.Terminal.Editor
                     GetCellDrawWidth(isScrollback, scrollbackRow, displayRow, col, cols),
                     _cellHeight);
 
+                bool boldBrightens = (cell.Flags & CellFlags.Bold) != 0;
                 Color bgColor = Opaque(cell.Background.ToUnityColor(theme.Palette, theme.DefaultBackground));
-                Color fgColor = Opaque(cell.Foreground.ToUnityColor(theme.Palette, theme.DefaultForeground));
+                Color fgColor = Opaque(ResolveForegroundWithBoldBright(cell.Foreground, boldBrightens, theme));
                 if ((cell.Flags & CellFlags.Inverse) != 0)
                 {
                     fgColor = Opaque(cell.Background.ToUnityColor(theme.Palette, theme.DefaultBackground));
-                    bgColor = Opaque(cell.Foreground.ToUnityColor(theme.Palette, theme.DefaultForeground));
+                    bgColor = Opaque(ResolveForegroundWithBoldBright(cell.Foreground, boldBrightens, theme));
                 }
 
                 if ((cell.Flags & CellFlags.Dim) != 0)
@@ -645,6 +646,17 @@ namespace Linalab.Terminal.Editor
         {
             color.a = 1f;
             return color;
+        }
+
+        static Color ResolveForegroundWithBoldBright(TerminalColor foreground, bool bold, TerminalTheme theme)
+        {
+            if (bold && foreground.ColorKind == TerminalColor.Kind.Named && foreground.R < 8)
+            {
+                byte brightIndex = (byte)(foreground.R + 8);
+                return TerminalColor.Named(brightIndex).ToUnityColor(theme.Palette, theme.DefaultForeground);
+            }
+
+            return foreground.ToUnityColor(theme.Palette, theme.DefaultForeground);
         }
 
         static GUIStyle CreateVariantStyle(GUIStyle baseStyle, FontStyle fontStyle)

@@ -140,6 +140,7 @@ namespace Linalab.Terminal.Editor
 
             _toolbarContainer = new IMGUIContainer(DrawToolbar);
             _toolbarContainer.style.flexShrink = 0;
+            _toolbarContainer.disablePlayModeTint = true;
             rootVisualElement.Add(_toolbarContainer);
         }
 
@@ -168,6 +169,7 @@ namespace Linalab.Terminal.Editor
             // Let the terminal surface receive pointer input directly instead of
             // resolving the parent container as the hit target.
             _surfaceContainer.pickingMode = PickingMode.Ignore;
+            _surfaceContainer.disablePlayModeTint = true;
             rootVisualElement.Add(_surfaceContainer);
         }
 
@@ -197,6 +199,7 @@ namespace Linalab.Terminal.Editor
             _lastTextInputSinkValue = string.Empty;
             ResetCompositionCursorAnchor();
             _textInputSink.pickingMode = PickingMode.Ignore;
+            _textInputSink.disablePlayModeTint = true;
             _textInputSink.style.position = Position.Absolute;
             MoveTextInputSinkOffscreen();
             _textInputSink.style.opacity = 0f;
@@ -903,9 +906,35 @@ namespace Linalab.Terminal.Editor
             if (_textInputSink != null)
             {
                 _textInputSink.SetValueWithoutNotify(string.Empty);
+                ClampTextInputSinkCaret();
             }
 
             _lastTextInputSinkValue = string.Empty;
+        }
+
+        void ClampTextInputSinkCaret()
+        {
+            if (_textInputSink == null)
+            {
+                return;
+            }
+
+            // Unity's TextEditingUtilities.GeneratePreviewString calls
+            // String.Insert(cursorIndex, compositionString). If the TextField's
+            // internal cursor/select indices are stale (e.g. left behind at
+            // position 1 after we cleared the value), the next IME key event
+            // throws ArgumentOutOfRangeException. Clamping the caret to the
+            // current value length keeps the hidden sink's editor state
+            // consistent with its displayed text.
+            try
+            {
+                var length = _textInputSink.value?.Length ?? 0;
+                _textInputSink.SelectRange(length, length);
+            }
+            catch (System.Exception ex)
+            {
+                VerboseLog($"[TerminalSink] SelectRange failed: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         void MoveTextInputSinkOffscreen()
@@ -976,6 +1005,7 @@ namespace Linalab.Terminal.Editor
             }
 
             _textInputSink.SetValueWithoutNotify(string.Empty);
+            ClampTextInputSinkCaret();
             _lastTextInputSinkValue = string.Empty;
         }
 
