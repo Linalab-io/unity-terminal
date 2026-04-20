@@ -32,6 +32,7 @@ namespace Linalab.Terminal.Editor
         bool _surfaceAttachPending;
         bool _restoreTextInputFocusAfterSubmit;
         bool _loggedBufferPreview;
+        bool _wasShellRunning;
         double _lastPollTime;
         double _lastWriteTime;
         int _lastAppliedFontSize;
@@ -51,6 +52,9 @@ namespace Linalab.Terminal.Editor
             public AnsiParser Parser;
             public ShellProcess ShellProcess;
             public bool HasStartedShell;
+            public bool IsTmuxClient;
+            public bool? HasReconnectableTmuxSession;
+            public string TmuxSessionName;
         }
 
         [MenuItem(MenuPath)]
@@ -553,6 +557,14 @@ namespace Linalab.Terminal.Editor
                 _terminalSurface?.MarkDirtyRepaint();
             }
 
+            var shellRunning = _shellProcess.IsRunning;
+            if (_wasShellRunning && !shellRunning)
+            {
+                RefreshTmuxReconnectabilityCacheIfNeeded(force: true);
+            }
+
+            _wasShellRunning = shellRunning;
+
             UpdateTextInputSinkPlacement();
 
             if (_needsResize && _terminalSurface != null)
@@ -641,7 +653,14 @@ namespace Linalab.Terminal.Editor
             GUILayout.BeginHorizontal(EditorStyles.toolbar);
             if (GUILayout.Button("Restart", EditorStyles.toolbarButton, GUILayout.Width(60f)))
             {
-                RestartShell();
+                if (ShouldReconnectTmuxOnRestart())
+                {
+                    ReconnectTmux();
+                }
+                else
+                {
+                    RestartShell();
+                }
             }
 
             if (GUILayout.Button("Settings", EditorStyles.toolbarButton, GUILayout.Width(64f)))
@@ -678,7 +697,8 @@ namespace Linalab.Terminal.Editor
             GUILayout.FlexibleSpace();
             if (TerminalSettings.TmuxAutoAttach)
             {
-                GUILayout.Label($"tmux:{TerminalSettings.GetTmuxSessionName()}", EditorStyles.miniLabel);
+                var displayedTmuxSessionName = s_sharedSession?.TmuxSessionName ?? TerminalSettings.GetTmuxSessionName();
+                GUILayout.Label($"tmux:{displayedTmuxSessionName}", EditorStyles.miniLabel);
                 GUILayout.Space(8f);
             }
 
@@ -702,13 +722,16 @@ namespace Linalab.Terminal.Editor
             if (!shellRunning)
             {
                 GUILayout.Space(4f);
-                EditorGUILayout.HelpBox("Terminal session is disconnected. Use Restart to reconnect explicitly.", MessageType.Info);
+                var disconnectedMessage = HasReconnectableTmuxSession()
+                    ? $"tmux session '{s_sharedSession.TmuxSessionName}' is still available. Use Restart to reattach without disturbing its running work."
+                    : "Terminal session is disconnected. Use Restart to reconnect explicitly.";
+                EditorGUILayout.HelpBox(disconnectedMessage, MessageType.Info);
             }
         }
 
-        void HandleKeyInput(Event evt)
+        void HandleKeyInput(KeyDownEvent evt)
         {
-            if (evt == null || evt.type != EventType.KeyDown)
+            if (evt == null)
             {
                 return;
             }
@@ -720,26 +743,26 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            var isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.command : evt.control;
+            var isCommandModifier = Application.platform == RuntimePlatform.OSXEditor ? evt.commandKey : evt.ctrlKey;
             if (isCommandModifier && evt.keyCode == KeyCode.C && _terminalSurface != null && _terminalSurface.HasSelection)
             {
                 EditorGUIUtility.systemCopyBuffer = _terminalSurface.GetSelectedText();
-                evt.Use();
+                evt.StopPropagation();
                 return;
             }
 
-            if ((evt.command || evt.control) && evt.keyCode == KeyCode.C)
+            if ((evt.commandKey || evt.ctrlKey) && evt.keyCode == KeyCode.C)
             {
                 WriteUserInputToShell("\x03", "surface-ctrl-c");
                 _terminalSurface?.ScrollToBottom();
-                evt.Use();
+                evt.StopPropagation();
                 return;
             }
 
-            if (TerminalInputHandler.IsPrimaryPasteShortcut(Application.platform, evt.keyCode, evt.command, evt.control))
+            if (TerminalInputHandler.IsPrimaryPasteShortcut(Application.platform, evt.keyCode, evt.commandKey, evt.ctrlKey))
             {
                 HandlePasteInput("surface-paste");
-                evt.Use();
+                evt.StopPropagation();
                 return;
             }
 
@@ -748,7 +771,7 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            var translated = TerminalInputHandler.TranslateKeyEvent(evt);
+            var translated = TerminalInputHandler.TranslateKeyEvent(evt.character, evt.keyCode, evt.ctrlKey, evt.shiftKey, Input.compositionString);
             if (translated == null)
             {
                 return;
@@ -756,23 +779,23 @@ namespace Linalab.Terminal.Editor
 
             if (ShouldSuppressImmediateDuplicateWrite(translated))
             {
-                evt.Use();
+                evt.StopPropagation();
                 return;
             }
 
             WriteUserInputToShell(translated, "surface-keydown");
             _terminalSurface?.ScrollToBottom();
-            evt.Use();
+            evt.StopPropagation();
         }
 
-        static bool ShouldRouteSurfaceKeyDown(Event evt)
+        static bool ShouldRouteSurfaceKeyDown(KeyDownEvent evt)
         {
             if (evt == null)
             {
                 return false;
             }
 
-            if ((evt.command || evt.control) && evt.keyCode != KeyCode.None)
+            if ((evt.commandKey || evt.ctrlKey) && evt.keyCode != KeyCode.None)
             {
                 return true;
             }
@@ -990,7 +1013,7 @@ namespace Linalab.Terminal.Editor
 
         void HandlePasteInput(string source)
         {
-            var paste = TerminalInputHandler.GetPasteText();
+            var paste = TerminalInputHandler.GetPasteInput(TerminalSettings.GetProjectRootDirectory());
             if (string.IsNullOrEmpty(paste))
             {
                 return;
@@ -1240,9 +1263,80 @@ namespace Linalab.Terminal.Editor
                 Buffer = _buffer,
                 Parser = _parser,
                 ShellProcess = _shellProcess,
-                HasStartedShell = false
+                HasStartedShell = false,
+                IsTmuxClient = false,
+                HasReconnectableTmuxSession = null
             };
             StartShell();
+        }
+
+        void ReconnectTmux()
+        {
+            _shellProcess?.DetachLocalClient();
+
+            if (_buffer == null)
+            {
+                _buffer = new TerminalBuffer(DefaultRows, DefaultCols, TerminalSettings.ScrollbackLimit);
+            }
+
+            _terminalSurface?.ClearSelection();
+            _shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
+            _parser = new AnsiParser(_buffer);
+            _parser.ResponseCallback = response => _shellProcess?.Write(response);
+            _terminalSurface?.SetMouseProtocolSource(_parser);
+
+            var carriedSessionName = TerminalSettings.GetTmuxSessionName();
+            s_sharedSession = new TerminalRuntimeSession
+            {
+                Buffer = _buffer,
+                Parser = _parser,
+                ShellProcess = _shellProcess,
+                HasStartedShell = false,
+                IsTmuxClient = true,
+                HasReconnectableTmuxSession = null,
+                TmuxSessionName = carriedSessionName
+            };
+            StartShell();
+        }
+
+        bool ShouldReconnectTmuxOnRestart()
+        {
+            if (s_sharedSession == null || !s_sharedSession.IsTmuxClient)
+            {
+                return false;
+            }
+
+            RefreshTmuxReconnectabilityCacheIfNeeded(force: true);
+            return s_sharedSession.HasReconnectableTmuxSession == true;
+        }
+
+        bool HasReconnectableTmuxSession()
+        {
+            return s_sharedSession?.HasReconnectableTmuxSession == true;
+        }
+
+        bool RefreshTmuxReconnectabilityCacheIfNeeded(bool force = false)
+        {
+            if (s_sharedSession == null)
+            {
+                return false;
+            }
+
+            if (!s_sharedSession.IsTmuxClient)
+            {
+                s_sharedSession.HasReconnectableTmuxSession = false;
+                return false;
+            }
+
+            if (!force && s_sharedSession.HasReconnectableTmuxSession.HasValue)
+            {
+                return s_sharedSession.HasReconnectableTmuxSession.Value;
+            }
+
+            var sessionName = s_sharedSession.TmuxSessionName;
+            var hasSession = !string.IsNullOrEmpty(sessionName) && ShellProcess.TmuxSessionExists(sessionName);
+            s_sharedSession.HasReconnectableTmuxSession = hasSession;
+            return hasSession;
         }
 
         void StartShell()
@@ -1275,7 +1369,20 @@ namespace Linalab.Terminal.Editor
             if (s_sharedSession != null)
             {
                 s_sharedSession.HasStartedShell = true;
+                s_sharedSession.IsTmuxClient = _shellProcess.UsedTmuxAttachStartupPath;
+                if (s_sharedSession.IsTmuxClient)
+                {
+                    s_sharedSession.TmuxSessionName = TerminalSettings.GetTmuxSessionName();
+                    RefreshTmuxReconnectabilityCacheIfNeeded(force: true);
+                }
+                else
+                {
+                    s_sharedSession.TmuxSessionName = null;
+                    s_sharedSession.HasReconnectableTmuxSession = null;
+                }
             }
+
+            _wasShellRunning = _shellProcess.IsRunning;
         }
 
         static bool HasUsableShellSize(int cols, int rows)
@@ -1378,7 +1485,7 @@ namespace Linalab.Terminal.Editor
         static bool TryApplyTmuxAutoAttachSelection()
         {
             var canonical = TerminalSettings.GetCanonicalTmuxSessionName();
-            var existing = ShellProcess.ListTmuxSessions() ?? Array.Empty<string>();
+            var existing = ShellProcess.ListTmuxSessionInfos() ?? Array.Empty<TmuxSessionInfo>();
             var result = TmuxSessionPicker.ShowModal(existing, canonical, out var selected);
             switch (result)
             {
@@ -1459,6 +1566,7 @@ namespace Linalab.Terminal.Editor
             _rootInputCallbacksRegistered = false;
             _surfaceAttachPending = false;
             _initialized = false;
+            _wasShellRunning = false;
         }
     }
 }

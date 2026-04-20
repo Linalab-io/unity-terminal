@@ -6,6 +6,61 @@ using UnityEngine;
 
 namespace Linalab.Terminal.Editor
 {
+    public struct TerminalSnapshot
+    {
+        public int VisibleRows;
+        public int VisibleCols;
+        public float CellWidth;
+        public float CellHeight;
+        public Color DefaultBackground;
+        public Color DefaultForeground;
+        public Color CursorColor;
+        public List<TerminalRowSnapshot> Rows;
+        public CursorSnapshot Cursor;
+        public CompositionPreviewSnapshot CompositionPreview;
+    }
+
+    public struct TerminalRowSnapshot
+    {
+        public int RowIndex;
+        public List<TerminalRunSnapshot> TextRuns;
+        public List<TerminalBackgroundSnapshot> Backgrounds;
+    }
+
+    public struct TerminalRunSnapshot
+    {
+        public int StartCol;
+        public int DisplayWidth;
+        public string Text;
+        public Color Foreground;
+        public CellFlags Flags;
+    }
+
+    public struct TerminalBackgroundSnapshot
+    {
+        public int StartCol;
+        public int DisplayWidth;
+        public Color Color;
+    }
+
+    public struct CursorSnapshot
+    {
+        public bool Visible;
+        public int Row;
+        public int Col;
+        public int DisplayWidth;
+        public string Text;
+    }
+
+    public struct CompositionPreviewSnapshot
+    {
+        public bool Visible;
+        public int Row;
+        public int Col;
+        public int DisplayWidth;
+        public string Text;
+    }
+
     public sealed class TerminalRenderer
     {
         public readonly struct SelectionRange
@@ -61,9 +116,6 @@ namespace Linalab.Terminal.Editor
 
         readonly ITerminalBuffer _buffer;
         GUIStyle _cellStyle;
-        GUIStyle _boldCellStyle;
-        GUIStyle _italicCellStyle;
-        GUIStyle _boldItalicCellStyle;
         float _cellWidth;
         float _cellHeight;
         bool _cursorVisible;
@@ -78,21 +130,23 @@ namespace Linalab.Terminal.Editor
 
         public int VisibleCols { get; private set; }
         public int VisibleRows { get; private set; }
-        internal float CellWidth => _cellWidth;
-        internal float CellHeight => _cellHeight;
+        public float CellWidth => _cellWidth;
+        public float CellHeight => _cellHeight;
         public bool HasSelection => _selection.HasValue;
 
         public void InvalidateStyle()
         {
             _cellStyle = null;
-            _boldCellStyle = null;
-            _italicCellStyle = null;
-            _boldItalicCellStyle = null;
         }
 
         public bool CalculateGridSize(Rect area)
         {
             EnsureStyle();
+            if (area.width < 1f || area.height < 1f)
+            {
+                return false;
+            }
+
             var newVisibleCols = Mathf.Max(1, Mathf.FloorToInt(area.width / _cellWidth));
             var newVisibleRows = Mathf.Max(1, Mathf.FloorToInt(area.height / _cellHeight));
             var changed = newVisibleCols != VisibleCols || newVisibleRows != VisibleRows;
@@ -162,11 +216,30 @@ namespace Linalab.Terminal.Editor
             return builder.ToString();
         }
 
-        public void Draw(Rect area)
+        public Font GetFont()
+        {
+            EnsureStyle();
+            return _cellStyle?.font;
+        }
+
+        public TerminalSnapshot BuildSnapshot(string compositionString)
         {
             EnsureStyle();
             TerminalTheme theme = TerminalThemeResolver.GetCurrentTheme();
-            EditorDrawRect(area, Opaque(theme.DefaultBackground));
+            
+            var snapshot = new TerminalSnapshot
+            {
+                VisibleRows = VisibleRows,
+                VisibleCols = VisibleCols,
+                CellWidth = _cellWidth,
+                CellHeight = _cellHeight,
+                DefaultBackground = Opaque(theme.DefaultBackground),
+                DefaultForeground = Opaque(theme.DefaultForeground),
+                CursorColor = Opaque(theme.CursorColor),
+                Rows = new List<TerminalRowSnapshot>(),
+                Cursor = new CursorSnapshot { Visible = false },
+                CompositionPreview = new CompositionPreviewSnapshot { Visible = false }
+            };
 
             var rows = Mathf.Min(VisibleRows, _buffer.Rows);
             var cols = Mathf.Min(VisibleCols, _buffer.Cols);
@@ -180,13 +253,22 @@ namespace Linalab.Terminal.Editor
 
             for (var row = 0; row < rows; row++)
             {
-                DrawRow(area, row, cols);
+                snapshot.Rows.Add(BuildRowSnapshot(row, cols, theme));
             }
 
             if (_scrollbackOffset == 0)
             {
-                DrawCursor(area);
+                if (!string.IsNullOrEmpty(compositionString))
+                {
+                    snapshot.CompositionPreview = BuildCompositionPreviewSnapshot(compositionString);
+                }
+                else
+                {
+                    snapshot.Cursor = BuildCursorSnapshot();
+                }
             }
+
+            return snapshot;
         }
 
         void EnsureStyle()
@@ -214,20 +296,45 @@ namespace Linalab.Terminal.Editor
                 stretchHeight = false,
                 contentOffset = Vector2.zero
             };
-            _cellStyle.normal.textColor = Color.white;
-            _cellStyle.hover.textColor = Color.white;
-            _cellStyle.focused.textColor = Color.white;
-            _cellStyle.active.textColor = Color.white;
-            _boldCellStyle = CreateVariantStyle(_cellStyle, FontStyle.Bold);
-            _italicCellStyle = CreateVariantStyle(_cellStyle, FontStyle.Italic);
-            _boldItalicCellStyle = CreateVariantStyle(_cellStyle, FontStyle.BoldAndItalic);
 
-            const int widthProbeLength = 16;
-            var widthProbe = new GUIContent(new string('M', widthProbeLength));
-            var measuredWidth = _cellStyle.CalcSize(widthProbe).x / widthProbeLength;
-            var measuredHeight = Mathf.Max(_cellStyle.lineHeight, _cellStyle.CalcSize(new GUIContent("M")).y);
-            _cellWidth = Mathf.Max(1f, measuredWidth);
-            _cellHeight = Mathf.Max(1f, measuredHeight);
+            const string CellWidthProbeCharacters = "MW@#%&_gjy|/\\[]{}()";
+            const string CellHeightProbeCharacters = "MW@#%&_gjy|/\\[]{}()한あ中█\uE0B0\uE0B1\uE0A0";
+
+            float maxNormalizedWidth = 0f;
+            float maxHeight = Mathf.Max(1f, _cellStyle.lineHeight);
+
+            for (int i = 0; i < CellWidthProbeCharacters.Length; i++)
+            {
+                char probeCharacter = CellWidthProbeCharacters[i];
+                var probeContent = new GUIContent(probeCharacter.ToString());
+                Vector2 probeSize = _cellStyle.CalcSize(probeContent);
+                maxNormalizedWidth = Mathf.Max(maxNormalizedWidth, probeSize.x);
+            }
+
+            for (int i = 0; i < CellHeightProbeCharacters.Length; i++)
+            {
+                char probeCharacter = CellHeightProbeCharacters[i];
+                var probeContent = new GUIContent(probeCharacter.ToString());
+                Vector2 probeSize = _cellStyle.CalcSize(probeContent);
+                maxHeight = Mathf.Max(maxHeight, probeSize.y);
+            }
+
+            float pixelsPerPoint = Mathf.Max(1f, EditorGUIUtility.pixelsPerPoint);
+            float horizontalPadding = 1f / pixelsPerPoint;
+            float verticalPadding = 2f / pixelsPerPoint;
+            _cellWidth = Mathf.Max(1f, SnapToPixel(maxNormalizedWidth + horizontalPadding));
+            _cellHeight = Mathf.Max(1f, SnapToPixel(maxHeight + verticalPadding));
+        }
+
+        static float SnapToPixel(float value)
+        {
+            float pixelsPerPoint = EditorGUIUtility.pixelsPerPoint;
+            if (pixelsPerPoint <= 0f)
+            {
+                return value;
+            }
+
+            return Mathf.Round(value * pixelsPerPoint) / pixelsPerPoint;
         }
 
         static GUIStyle CreateTerminalBaseStyle()
@@ -278,22 +385,27 @@ namespace Linalab.Terminal.Editor
             var preferredFamilies = Application.platform == RuntimePlatform.WindowsEditor
                 ? new[]
                 {
-                    "CaskaydiaCove Nerd Font Mono",
-                    "JetBrainsMono Nerd Font Mono",
                     "Consolas",
                     "Courier New",
-                    "Lucida Console"
+                    "Lucida Console",
+                    "CaskaydiaCove Nerd Font Mono",
+                    "JetBrainsMono Nerd Font Mono",
+                    "FiraCode Nerd Font Mono",
+                    "Hack Nerd Font Mono"
                 }
                 : new[]
                 {
-                    "MesloLGS NF",
-                    "MesloLGS Nerd Font",
-                    "JetBrainsMono Nerd Font Mono",
-                    "Hack Nerd Font Mono",
-                    "SauceCodePro Nerd Font",
                     "Menlo",
                     "Monaco",
-                    "Courier"
+                    "Courier",
+                    "MesloLGS NF",
+                    "MesloLGSNerdFontMono",
+                    "MesloLGS Nerd Font Mono",
+                    "JetBrainsMono Nerd Font Mono",
+                    "Hack Nerd Font Mono",
+                    "HackNerdFontMono",
+                    "FiraCodeNerdFontMono",
+                    "FiraCode Nerd Font Mono"
                 };
 
             var installedFonts = Font.GetOSInstalledFontNames();
@@ -327,8 +439,15 @@ namespace Linalab.Terminal.Editor
             }
         }
 
-        void DrawRow(Rect area, int row, int cols)
+        TerminalRowSnapshot BuildRowSnapshot(int row, int cols, TerminalTheme theme)
         {
+            var rowSnapshot = new TerminalRowSnapshot
+            {
+                RowIndex = row,
+                TextRuns = new List<TerminalRunSnapshot>(),
+                Backgrounds = new List<TerminalBackgroundSnapshot>()
+            };
+
             var displayRow = row;
             var isScrollback = false;
             var scrollbackRow = -1;
@@ -342,7 +461,7 @@ namespace Linalab.Terminal.Editor
                     scrollbackRow = _buffer.ScrollbackCount - _scrollbackOffset + row;
                     if (scrollbackRow < 0)
                     {
-                        return;
+                        return rowSnapshot;
                     }
                 }
                 else
@@ -350,12 +469,11 @@ namespace Linalab.Terminal.Editor
                     displayRow = row - scrollbackRowsVisible;
                     if (displayRow >= _buffer.Rows)
                     {
-                        return;
+                        return rowSnapshot;
                     }
                 }
             }
 
-            TerminalTheme theme = TerminalThemeResolver.GetCurrentTheme();
             var runBuilder = new StringBuilder(cols);
             var runStartCol = 0;
             Color runForeground = Opaque(theme.DefaultForeground);
@@ -375,19 +493,20 @@ namespace Linalab.Terminal.Editor
                 {
                     if (hasRun)
                     {
-                        DrawTextRun(area, row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
+                        rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
+                        {
+                            StartCol = runStartCol,
+                            DisplayWidth = runBuilder.Length,
+                            Text = runBuilder.ToString(),
+                            Foreground = runForeground,
+                            Flags = runFlags
+                        });
                         hasRun = false;
                         runBuilder.Clear();
                     }
 
                     continue;
                 }
-
-                var cellRect = new Rect(
-                    area.x + (col * _cellWidth),
-                    area.y + (row * _cellHeight),
-                    GetCellDrawWidth(isScrollback, scrollbackRow, displayRow, col, cols),
-                    _cellHeight);
 
                 bool boldBrightens = (cell.Flags & CellFlags.Bold) != 0;
                 Color bgColor = Opaque(cell.Background.ToUnityColor(theme.Palette, theme.DefaultBackground));
@@ -417,21 +536,58 @@ namespace Linalab.Terminal.Editor
                     fgColor = Color.white;
                 }
 
-                if (bgColor != theme.DefaultBackground)
+                if (bgColor != Opaque(theme.DefaultBackground))
                 {
-                    EditorDrawRect(cellRect, bgColor);
+                    rowSnapshot.Backgrounds.Add(new TerminalBackgroundSnapshot
+                    {
+                        StartCol = col,
+                        DisplayWidth = isWideLead ? 2 : 1,
+                        Color = bgColor
+                    });
+                }
+
+                if (cell.Codepoint == ' ')
+                {
+                    if (hasRun)
+                    {
+                        rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
+                        {
+                            StartCol = runStartCol,
+                            DisplayWidth = runBuilder.Length,
+                            Text = runBuilder.ToString(),
+                            Foreground = runForeground,
+                            Flags = runFlags
+                        });
+                        hasRun = false;
+                        runBuilder.Clear();
+                    }
+                    continue;
                 }
 
                 if (isWideLead)
                 {
                     if (hasRun)
                     {
-                        DrawTextRun(area, row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
+                        rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
+                        {
+                            StartCol = runStartCol,
+                            DisplayWidth = runBuilder.Length,
+                            Text = runBuilder.ToString(),
+                            Foreground = runForeground,
+                            Flags = runFlags
+                        });
                         hasRun = false;
                         runBuilder.Clear();
                     }
 
-                    DrawTextRun(area, row, col, cell.Codepoint.ToString(), cell.Flags, fgColor, 2);
+                    rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
+                    {
+                        StartCol = col,
+                        DisplayWidth = 2,
+                        Text = cell.Codepoint.ToString(),
+                        Foreground = fgColor,
+                        Flags = cell.Flags
+                    });
                     continue;
                 }
 
@@ -445,7 +601,14 @@ namespace Linalab.Terminal.Editor
                 }
                 else if (runForeground != fgColor || runFlags != cell.Flags)
                 {
-                    DrawTextRun(area, row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
+                    rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
+                    {
+                        StartCol = runStartCol,
+                        DisplayWidth = runBuilder.Length,
+                        Text = runBuilder.ToString(),
+                        Foreground = runForeground,
+                        Flags = runFlags
+                    });
                     runStartCol = col;
                     runForeground = fgColor;
                     runFlags = cell.Flags;
@@ -457,8 +620,17 @@ namespace Linalab.Terminal.Editor
 
             if (hasRun)
             {
-                DrawTextRun(area, row, runStartCol, runBuilder.ToString(), runFlags, runForeground);
+                rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
+                {
+                    StartCol = runStartCol,
+                    DisplayWidth = runBuilder.Length,
+                    Text = runBuilder.ToString(),
+                    Foreground = runForeground,
+                    Flags = runFlags
+                });
             }
+
+            return rowSnapshot;
         }
 
         string GetSelectedRowText(int displayRow, int startCol, int endCol)
@@ -508,43 +680,17 @@ namespace Linalab.Terminal.Editor
             return mappedRow >= 0 && mappedRow < _buffer.Rows;
         }
 
-        float GetCellDrawWidth(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
-        {
-            return IsWideLeadCell(isScrollback, scrollbackRow, displayRow, col, cols) ? _cellWidth * 2f : _cellWidth;
-        }
-
-        void DrawTextRun(Rect area, int row, int startCol, string text, CellFlags flags, Color foreground, int displayWidth)
-        {
-            if (string.IsNullOrEmpty(text) || displayWidth <= 0)
-            {
-                return;
-            }
-
-            var runRect = new Rect(
-                area.x + (startCol * _cellWidth),
-                area.y + (row * _cellHeight),
-                displayWidth * _cellWidth,
-                _cellHeight);
-
-            GUI.Label(runRect, text, GetModifiedStyle(flags, foreground));
-        }
-
-        void DrawTextRun(Rect area, int row, int startCol, string text, CellFlags flags, Color foreground)
-        {
-            DrawTextRun(area, row, startCol, text, flags, foreground, text?.Length ?? 0);
-        }
-
-        void DrawCursor(Rect area)
+        CursorSnapshot BuildCursorSnapshot()
         {
             var cursor = _buffer.Cursor;
             if (!cursor.Visible || !_cursorVisible)
             {
-                return;
+                return new CursorSnapshot { Visible = false };
             }
 
             if (cursor.Row < 0 || cursor.Row >= VisibleRows || cursor.Col < 0 || cursor.Col >= VisibleCols)
             {
-                return;
+                return new CursorSnapshot { Visible = false };
             }
 
             int anchorCol = cursor.Col;
@@ -555,7 +701,7 @@ namespace Linalab.Terminal.Editor
                 int leadCol = cursor.Col - 1;
                 if (leadCol < 0 || !IsWideLeadCell(false, -1, cursor.Row, leadCol, VisibleCols))
                 {
-                    return;
+                    return new CursorSnapshot { Visible = false };
                 }
 
                 anchorCol = leadCol;
@@ -563,23 +709,44 @@ namespace Linalab.Terminal.Editor
                 cell = _buffer.GetCell(cursor.Row, leadCol);
             }
 
-            var cursorRect = new Rect(
-                area.x + (anchorCol * _cellWidth),
-                area.y + (cursor.Row * _cellHeight),
-                cursorWidth * _cellWidth,
-                _cellHeight);
-
-            var previousColor = GUI.color;
-            TerminalTheme theme = TerminalThemeResolver.GetCurrentTheme();
-            Color opaqueCursorColor = Opaque(theme.CursorColor);
-            GUI.color = opaqueCursorColor;
-            GUI.DrawTexture(cursorRect, Texture2D.whiteTexture);
-            GUI.color = previousColor;
-
-            if (cell.Codepoint != ' ')
+            return new CursorSnapshot
             {
-                GUI.Label(cursorRect, cell.Codepoint.ToString(), GetModifiedStyle(CellFlags.None, Opaque(theme.DefaultBackground)));
+                Visible = true,
+                Row = cursor.Row,
+                Col = anchorCol,
+                DisplayWidth = cursorWidth,
+                Text = cell.Codepoint == ' ' ? string.Empty : cell.Codepoint.ToString()
+            };
+        }
+
+        CompositionPreviewSnapshot BuildCompositionPreviewSnapshot(string compositionString)
+        {
+            var cursor = _buffer.Cursor;
+            if (cursor.Row < 0 || cursor.Row >= VisibleRows || cursor.Col < 0 || cursor.Col >= VisibleCols)
+            {
+                return new CompositionPreviewSnapshot { Visible = false };
             }
+
+            int anchorCol = cursor.Col;
+            int displayWidth = 0;
+            for (int i = 0; i < compositionString.Length; i++)
+            {
+                displayWidth += GetDisplayWidth(compositionString[i]);
+            }
+
+            if (displayWidth <= 0)
+            {
+                return new CompositionPreviewSnapshot { Visible = false };
+            }
+
+            return new CompositionPreviewSnapshot
+            {
+                Visible = true,
+                Row = cursor.Row,
+                Col = anchorCol,
+                DisplayWidth = displayWidth,
+                Text = compositionString
+            };
         }
 
         bool IsWideLeadCell(bool isScrollback, int scrollbackRow, int displayRow, int col, int cols)
@@ -657,38 +824,6 @@ namespace Linalab.Terminal.Editor
             }
 
             return foreground.ToUnityColor(theme.Palette, theme.DefaultForeground);
-        }
-
-        static GUIStyle CreateVariantStyle(GUIStyle baseStyle, FontStyle fontStyle)
-        {
-            var style = new GUIStyle(baseStyle);
-            style.fontStyle = fontStyle;
-            return style;
-        }
-
-        GUIStyle GetModifiedStyle(CellFlags flags, Color textColor)
-        {
-            GUIStyle style = flags switch
-            {
-                _ when (flags & CellFlags.Bold) != 0 && (flags & CellFlags.Italic) != 0 => _boldItalicCellStyle,
-                _ when (flags & CellFlags.Bold) != 0 => _boldCellStyle,
-                _ when (flags & CellFlags.Italic) != 0 => _italicCellStyle,
-                _ => _cellStyle
-            };
-
-            style.normal.textColor = textColor;
-            style.hover.textColor = textColor;
-            style.focused.textColor = textColor;
-            style.active.textColor = textColor;
-            return style;
-        }
-
-        static void EditorDrawRect(Rect rect, Color color)
-        {
-            var previousColor = GUI.color;
-            GUI.color = color;
-            GUI.DrawTexture(rect, Texture2D.whiteTexture);
-            GUI.color = previousColor;
         }
     }
 }
