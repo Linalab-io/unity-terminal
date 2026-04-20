@@ -93,6 +93,112 @@ namespace Linalab.Terminal.Editor.Tests
         }
 
         [Test]
+        public void ShellProcess_TmuxSessionExists_ReturnsFalse_ForInvalidNames()
+        {
+            Assert.That(ShellProcess.TmuxSessionExists(null), Is.False);
+            Assert.That(ShellProcess.TmuxSessionExists(string.Empty), Is.False);
+            Assert.That(ShellProcess.TmuxSessionExists("   "), Is.False);
+        }
+
+        [Test]
+        public void ShellProcess_TmuxSessionExists_ReturnsFalse_ForUnlikelySessionName()
+        {
+            var missing = "unity-terminal-smoke-missing-" + Guid.NewGuid().ToString("N");
+            Assert.That(ShellProcess.TmuxSessionExists(missing), Is.False);
+        }
+
+        [Test]
+        public void ShellProcess_DetachLocalClient_IsSafeBeforeStart()
+        {
+            using var shell = new ShellProcess(ShellProcess.DetectShell());
+            Assert.That(shell.IsRunning, Is.False);
+            Assert.DoesNotThrow(() => shell.DetachLocalClient());
+            Assert.That(shell.IsRunning, Is.False);
+        }
+
+        [Test]
+        public void ShellProcess_DetachLocalClient_ReleasesClientAndAllowsBufferReuse()
+        {
+            bool originalTmuxAutoAttach = TerminalSettings.TmuxAutoAttach;
+            TerminalSettings.TmuxAutoAttach = false;
+
+            var buffer = new TerminalBuffer(24, 80, 200);
+            var firstParser = new AnsiParser(buffer);
+            ShellProcess firstShell = null;
+            ShellProcess secondShell = null;
+
+            try
+            {
+                firstShell = new ShellProcess(ShellProcess.DetectShell());
+                firstParser.ResponseCallback = response => firstShell.Write(response);
+                firstShell.Start(Application.dataPath.Replace("/Assets", string.Empty), 80, 24);
+                Assert.That(firstShell.IsRunning, Is.True, "Shell process should start before detach test runs.");
+
+                firstShell.DetachLocalClient();
+
+                var detachDeadline = DateTime.UtcNow.AddSeconds(4);
+                while (firstShell.IsRunning && DateTime.UtcNow < detachDeadline)
+                {
+                    Thread.Sleep(25);
+                }
+
+                Assert.That(firstShell.IsRunning, Is.False, "DetachLocalClient should release the local client process.");
+
+                var secondParser = new AnsiParser(buffer);
+                secondShell = new ShellProcess(ShellProcess.DetectShell());
+                secondParser.ResponseCallback = response => secondShell.Write(response);
+                secondShell.Start(Application.dataPath.Replace("/Assets", string.Empty), 80, 24);
+                Assert.That(secondShell.IsRunning, Is.True, "A fresh shell should start on the same buffer after detach.");
+
+                const string marker = "DETACH_REUSE_MARKER_789";
+                secondShell.Write($"printf '{marker}\\r\\n'");
+                secondShell.Write("\n");
+
+                var combined = new StringBuilder();
+                var deadline = DateTime.UtcNow.AddSeconds(8);
+                while (DateTime.UtcNow < deadline)
+                {
+                    secondShell.DrainOutput(data =>
+                    {
+                        if (string.IsNullOrEmpty(data))
+                        {
+                            return;
+                        }
+
+                        combined.Append(data);
+                        secondParser.Feed(data);
+                    });
+
+                    secondShell.DrainErrors(data =>
+                    {
+                        if (string.IsNullOrEmpty(data))
+                        {
+                            return;
+                        }
+
+                        combined.Append(data);
+                        secondParser.Feed(data);
+                    });
+
+                    if (combined.ToString().Contains(marker, StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+
+                    Thread.Sleep(50);
+                }
+
+                Assert.That(combined.ToString(), Does.Contain(marker));
+            }
+            finally
+            {
+                TerminalSettings.TmuxAutoAttach = originalTmuxAutoAttach;
+                secondShell?.Dispose();
+                firstShell?.Dispose();
+            }
+        }
+
+        [Test]
         public void TerminalBuffer_Resize_PreservesVisibleContent_AndClampsCursor()
         {
             var buffer = new TerminalBuffer(3, 5, 10);

@@ -11,7 +11,7 @@ using Linalab;
 
 namespace Linalab.Terminal.Editor
 {
-    sealed class TmuxSessionInfo
+    public sealed class TmuxSessionInfo
     {
         public string Name;
         public string WorkspacePath;
@@ -41,6 +41,8 @@ namespace Linalab.Terminal.Editor
         Thread _errorReaderThread;
         bool _disposed;
         int _exitEventRaised;
+
+        public bool UsedTmuxAttachStartupPath { get; private set; }
 
         public ShellProcess(string shellPathOverride = null)
         {
@@ -130,7 +132,8 @@ namespace Linalab.Terminal.Editor
 
                 DisposeProcess();
                 var shellPath = ResolveStartShellPath(_shellPath);
-                var startInfo = CreateStartInfo(shellPath, workingDirectory, cols, rows);
+                var startInfo = CreateStartInfo(shellPath, workingDirectory, cols, rows, out bool usedTmuxAttachStartupPath);
+                UsedTmuxAttachStartupPath = usedTmuxAttachStartupPath;
 
                 _process = new Process
                 {
@@ -258,6 +261,48 @@ namespace Linalab.Terminal.Editor
             }
 
             TerminateProcess(process);
+        }
+
+        /// <summary>
+        /// Non-destructive counterpart to <see cref="Kill"/>/<see cref="Dispose"/>:
+        /// releases the local client process and its readers without writing
+        /// Ctrl+C or calling <c>process.Kill()</c>, so a tmux server session
+        /// attached through this client keeps running. After this call the
+        /// instance is inert and callers must construct a fresh ShellProcess
+        /// to reattach.
+        /// </summary>
+        public void DetachLocalClient()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            Process process;
+            lock (_syncRoot)
+            {
+                process = _process;
+            }
+
+            if (IsProcessRunning(process))
+            {
+                try
+                {
+                    process.StandardInput?.Close();
+                }
+                catch (IOException)
+                {
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+
+            _disposed = true;
+            lock (_syncRoot)
+            {
+                DisposeProcess();
+            }
         }
 
         public void Resize(int cols, int rows)
@@ -441,8 +486,9 @@ namespace Linalab.Terminal.Editor
             return "/bin/bash";
         }
 
-        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory, int cols, int rows)
+        static ProcessStartInfo CreateStartInfo(string shellPath, string workingDirectory, int cols, int rows, out bool usedTmuxAttachStartupPath)
         {
+            usedTmuxAttachStartupPath = false;
             var startInfo = new ProcessStartInfo
             {
                 FileName = shellPath,
@@ -473,7 +519,7 @@ namespace Linalab.Terminal.Editor
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists("/usr/bin/script"))
             {
                 startInfo.FileName = "/usr/bin/script";
-                startInfo.Arguments = CreatePseudoTerminalArguments(shellPath);
+                startInfo.Arguments = CreatePseudoTerminalArguments(shellPath, out usedTmuxAttachStartupPath);
             }
 
             return startInfo;
@@ -694,9 +740,9 @@ namespace Linalab.Terminal.Editor
             }
         }
 
-        static string CreatePseudoTerminalArguments(string shellPath)
+        static string CreatePseudoTerminalArguments(string shellPath, out bool usedTmuxAttachStartupPath)
         {
-            var innerCommand = BuildPseudoTerminalInnerCommand(shellPath);
+            var innerCommand = BuildPseudoTerminalInnerCommand(shellPath, out usedTmuxAttachStartupPath);
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
@@ -706,17 +752,24 @@ namespace Linalab.Terminal.Editor
             return $"-q -c {QuoteArgument(innerCommand)} /dev/null";
         }
 
-        static string BuildPseudoTerminalInnerCommand(string shellPath)
+        static string BuildPseudoTerminalInnerCommand(string shellPath, out bool usedTmuxAttachStartupPath)
         {
+            usedTmuxAttachStartupPath = false;
+
             if (TerminalSettings.TmuxAutoAttach)
             {
                 string tmuxPath = ResolveCommandPath("tmux");
                 if (!string.IsNullOrEmpty(tmuxPath))
                 {
+                    usedTmuxAttachStartupPath = true;
                     string sessionName = TerminalSettings.GetTmuxSessionName();
                     string quotedTmuxPath = QuoteShellArgument(tmuxPath);
                     string quotedSessionName = QuoteShellArgument(sessionName);
-                    string tmuxCommand = $"if {quotedTmuxPath} has-session -t {quotedSessionName} 2>/dev/null; then exec {quotedTmuxPath} attach-session -t {quotedSessionName}; else exec {quotedTmuxPath} new-session -s {quotedSessionName}; fi";
+                    string tmuxSocketPath = GetTmuxSocketPath();
+                    string tmuxSocketArgument = string.IsNullOrEmpty(tmuxSocketPath)
+                        ? string.Empty
+                        : $" -S {QuoteShellArgument(tmuxSocketPath)}";
+                    string tmuxCommand = $"if {quotedTmuxPath}{tmuxSocketArgument} has-session -t {quotedSessionName} 2>/dev/null; then exec {quotedTmuxPath}{tmuxSocketArgument} attach-session -t {quotedSessionName}; else exec {quotedTmuxPath}{tmuxSocketArgument} new-session -s {quotedSessionName}; fi";
                     return BuildInteractiveShellCommand(shellPath, tmuxCommand);
                 }
             }
@@ -825,6 +878,23 @@ namespace Linalab.Terminal.Editor
             return null;
         }
 
+        static string GetTmuxSocketPath()
+        {
+            var tmux = Environment.GetEnvironmentVariable("TMUX");
+            if (string.IsNullOrWhiteSpace(tmux))
+            {
+                return null;
+            }
+
+            int commaIndex = tmux.IndexOf(',');
+            if (commaIndex <= 0)
+            {
+                return null;
+            }
+
+            return tmux.Substring(0, commaIndex);
+        }
+
         public static string[] ListTmuxSessions()
         {
             var sessions = ListTmuxSessionInfos();
@@ -846,13 +916,33 @@ namespace Linalab.Terminal.Editor
             return names.ToArray();
         }
 
-        static TmuxSessionInfo[] ListTmuxSessionInfos()
+        public static bool TmuxSessionExists(string sessionName)
+        {
+            if (string.IsNullOrWhiteSpace(sessionName))
+            {
+                return false;
+            }
+
+            foreach (var name in ListTmuxSessions())
+            {
+                if (string.Equals(name, sessionName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static TmuxSessionInfo[] ListTmuxSessionInfos()
         {
             var tmuxPath = ResolveCommandPath("tmux");
             if (string.IsNullOrEmpty(tmuxPath))
             {
                 return Array.Empty<TmuxSessionInfo>();
             }
+
+            var tmuxSocketPath = GetTmuxSocketPath();
 
             try
             {
@@ -861,7 +951,9 @@ namespace Linalab.Terminal.Editor
                     StartInfo = new ProcessStartInfo
                     {
                         FileName = tmuxPath,
-                        Arguments = "list-sessions -F #{session_name}\t#{session_path}",
+                        Arguments = string.IsNullOrEmpty(tmuxSocketPath)
+                            ? "list-sessions -F \"#{session_name}\t#{session_path}\""
+                            : $"-S {QuoteArgument(tmuxSocketPath)} list-sessions -F \"#{{session_name}}\t#{{session_path}}\"",
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
                         UseShellExecute = false,
