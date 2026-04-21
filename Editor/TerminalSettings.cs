@@ -46,6 +46,18 @@ namespace Linalab.Terminal.Editor
                 return fontFamily;
             }
 
+            var ghosttyFont = TerminalThemeResolver.GetGhosttyFontFamily();
+            if (!string.IsNullOrWhiteSpace(ghosttyFont))
+            {
+                return ghosttyFont;
+            }
+
+            var zshFont = InferFontFamilyFromZsh();
+            if (!string.IsNullOrWhiteSpace(zshFont))
+            {
+                return zshFont;
+            }
+
             return string.Empty;
         }
 

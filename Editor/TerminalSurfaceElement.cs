@@ -307,7 +307,18 @@ namespace Linalab.Terminal.Editor
             }
 
             UpdateGridSize();
-            var snapshot = _renderer.BuildSnapshot(string.Empty);
+            var snapshot = _renderer.BuildSnapshot(Input.compositionString);
+            
+            if (snapshot.CompositionPreview.Visible)
+            {
+                cursorRect = new Rect(
+                    snapshot.CompositionPreview.Col * snapshot.CellWidth,
+                    snapshot.CompositionPreview.Row * snapshot.CellHeight,
+                    snapshot.CompositionPreview.DisplayWidth * snapshot.CellWidth,
+                    snapshot.CellHeight);
+                return true;
+            }
+
             if (!snapshot.Cursor.Visible)
             {
                 return false;
@@ -424,6 +435,7 @@ namespace Linalab.Terminal.Editor
                     el.style.unityFontStyleAndWeight = new StyleEnum<FontStyle>(fontStyle);
                     el.style.fontSize = TerminalSettings.FontSize;
                     el.style.unityFont = new StyleFont(_renderer.GetFont());
+                    el.style.unityFontDefinition = new StyleFontDefinition(StyleKeyword.None);
                 }
             }
 
@@ -451,6 +463,7 @@ namespace Linalab.Terminal.Editor
                 _compositionText.style.unityFontStyleAndWeight = new StyleEnum<FontStyle>(FontStyle.Normal);
                 _compositionText.style.fontSize = TerminalSettings.FontSize;
                 _compositionText.style.unityFont = new StyleFont(_renderer.GetFont());
+                _compositionText.style.unityFontDefinition = new StyleFontDefinition(StyleKeyword.None);
             }
             else if (snapshot.Cursor.Visible)
             {
@@ -473,6 +486,7 @@ namespace Linalab.Terminal.Editor
                     _cursorText.style.unityFontStyleAndWeight = new StyleEnum<FontStyle>(FontStyle.Normal);
                     _cursorText.style.fontSize = TerminalSettings.FontSize;
                     _cursorText.style.unityFont = new StyleFont(_renderer.GetFont());
+                    _cursorText.style.unityFontDefinition = new StyleFontDefinition(StyleKeyword.None);
                 }
             }
 

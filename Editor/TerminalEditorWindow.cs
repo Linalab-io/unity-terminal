@@ -904,6 +904,11 @@ namespace Linalab.Terminal.Editor
 
             if (!string.IsNullOrEmpty(Input.compositionString))
             {
+                // Keep the baseline in sync with the sink's current value
+                // during composition so that canceling/clearing the
+                // composition does not leave stale text that would later be
+                // treated as committed input via ExtractCommittedText.
+                _lastTextInputSinkValue = SanitizeCommittedText(evt.newValue);
                 UpdateTextInputSinkPlacement();
                 _terminalSurface?.MarkDirtyRepaint();
                 return;
