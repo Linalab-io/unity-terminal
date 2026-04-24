@@ -2,9 +2,7 @@
 
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-pink?logo=githubsponsors)](https://github.com/sponsors/islee23520)
 
-Standalone IMGUI-based terminal tool for the Unity Editor.
-
-This package embeds a terminal window directly inside the Unity Editor so you can run shell commands without leaving your project context. The package is distributed as `com.linalab.unity-terminal` and currently targets Unity `6000.0`.
+Standalone terminal tool for the Unity Editor that lets you run shell commands without leaving your project context. The package is distributed as `com.linalab.unity-terminal` and currently targets Unity `6000.0`.
 
 If this project helps your workflow, you can [support it on GitHub Sponsors](https://github.com/sponsors/islee23520).
 
@@ -12,10 +10,9 @@ If this project helps your workflow, you can [support it on GitHub Sponsors](htt
 
 - Open a terminal from the Unity Editor menu.
 - Run an interactive POSIX shell inside the editor.
-- Parse ANSI output and render it in an IMGUI terminal surface.
+- Parse ANSI output and render it in a UI Toolkit terminal surface.
 - Resize the in-editor terminal grid from the live Unity container size.
 - Configure shell, font, scrollback, and cursor blink settings from Unity Preferences.
-- Keep terminal state, rendering, parsing, and process management separated in a small editor-only assembly.
 
 ## Installation
 
@@ -45,7 +42,7 @@ After importing the package, open the terminal from:
 Tools > Unity Editor Terminal
 ```
 
-The window is created by `Editor/TerminalEditorWindow.cs` and starts a shell using the configured working directory and shell profile.
+The terminal starts a shell using the configured working directory and shell profile.
 
 ## Configuration
 
@@ -84,14 +81,14 @@ Core files:
 - `Editor/ShellProcess.cs` — shell startup, process lifecycle, output draining
 - `Editor/AnsiParser.cs` — ANSI escape sequence parsing
 - `Editor/TerminalBuffer.cs` — terminal grid, cursor, and scrollback model
-- `Editor/TerminalSurfaceElement.cs` — UI Toolkit-hosted IMGUI drawing and selection rendering
+- `Editor/TerminalSurfaceElement.cs` — UI Toolkit terminal surface, selection handling, and composition/cursor overlays
 
 ## How It Works
 
 The runtime flow is:
 
 ```text
-ShellProcess -> AnsiParser -> TerminalBuffer -> TerminalSurfaceElement
+ShellProcess -> AnsiParser -> TerminalBuffer -> TerminalRenderer -> TerminalSurfaceElement
 ```
 
 This keeps shell I/O, parsing, state, and drawing responsibilities separated inside the `Linalab.Terminal.Editor` assembly.

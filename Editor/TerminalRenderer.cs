@@ -219,7 +219,20 @@ namespace Linalab.Terminal.Editor
         public Font GetFont()
         {
             EnsureStyle();
-            return _cellStyle?.font;
+            return _cellStyle?.font ?? GetFallbackFont();
+        }
+
+        public bool TryGetInputCursor(out CursorSnapshot cursor)
+        {
+            EnsureStyle();
+            if (_scrollbackOffset != 0)
+            {
+                cursor = new CursorSnapshot { Visible = false };
+                return false;
+            }
+
+            cursor = BuildCursorSnapshot(ignoreBlink: true);
+            return cursor.Visible;
         }
 
         public TerminalSnapshot BuildSnapshot(string compositionString)
@@ -279,7 +292,7 @@ namespace Linalab.Terminal.Editor
             }
 
             GUIStyle baseStyle = CreateTerminalBaseStyle();
-            Font font = CreateMonospaceFont(TerminalSettings.GetEffectiveFontFamily(), TerminalSettings.FontSize) ?? baseStyle.font;
+            Font font = CreateMonospaceFont(TerminalSettings.GetEffectiveFontFamily(), TerminalSettings.FontSize) ?? GetFallbackFont();
 
             _cellStyle = new GUIStyle(baseStyle)
             {
@@ -373,6 +386,23 @@ namespace Linalab.Terminal.Editor
             return style;
         }
 
+        static Font GetFallbackFont()
+        {
+            try
+            {
+                var monospaceFallback = Font.CreateDynamicFontFromOSFont(GetPlatformPreferredFontFamilies(), TerminalSettings.FontSize);
+                if (monospaceFallback != null)
+                {
+                    return monospaceFallback;
+                }
+            }
+            catch
+            {
+            }
+
+            return EditorStyles.label.font ?? GUI.skin?.font;
+        }
+
         static Font CreateMonospaceFont(string preferredFontFamily, int fontSize)
         {
             var fontNames = ResolveFontCandidates(preferredFontFamily);
@@ -382,7 +412,29 @@ namespace Linalab.Terminal.Editor
 
         static string[] ResolveFontCandidates(string preferredFontFamily)
         {
-            var preferredFamilies = Application.platform == RuntimePlatform.WindowsEditor
+            var preferredFamilies = GetPlatformPreferredFontFamilies();
+
+            var installedFonts = Font.GetOSInstalledFontNames();
+            var installedFontSet = new HashSet<string>(installedFonts, StringComparer.OrdinalIgnoreCase);
+            var candidates = new List<string>(preferredFamilies.Length + 1);
+
+            AddInstalledFont(candidates, installedFontSet, preferredFontFamily);
+            for (var i = 0; i < preferredFamilies.Length; i++)
+            {
+                AddInstalledFont(candidates, installedFontSet, preferredFamilies[i]);
+            }
+
+            if (candidates.Count == 0)
+            {
+                return preferredFamilies;
+            }
+
+            return candidates.ToArray();
+        }
+
+        static string[] GetPlatformPreferredFontFamilies()
+        {
+            return Application.platform == RuntimePlatform.WindowsEditor
                 ? new[]
                 {
                     "Consolas",
@@ -407,23 +459,6 @@ namespace Linalab.Terminal.Editor
                     "FiraCodeNerdFontMono",
                     "FiraCode Nerd Font Mono"
                 };
-
-            var installedFonts = Font.GetOSInstalledFontNames();
-            var installedFontSet = new HashSet<string>(installedFonts, StringComparer.OrdinalIgnoreCase);
-            var candidates = new List<string>(preferredFamilies.Length + 1);
-
-            AddInstalledFont(candidates, installedFontSet, preferredFontFamily);
-            for (var i = 0; i < preferredFamilies.Length; i++)
-            {
-                AddInstalledFont(candidates, installedFontSet, preferredFamilies[i]);
-            }
-
-            if (candidates.Count == 0)
-            {
-                return preferredFamilies;
-            }
-
-            return candidates.ToArray();
         }
 
         static void AddInstalledFont(List<string> candidates, HashSet<string> installedFontSet, string fontName)
@@ -491,20 +526,7 @@ namespace Linalab.Terminal.Editor
 
                 if (isContinuation)
                 {
-                    if (hasRun)
-                    {
-                        rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
-                        {
-                            StartCol = runStartCol,
-                            DisplayWidth = runBuilder.Length,
-                            Text = runBuilder.ToString(),
-                            Foreground = runForeground,
-                            Flags = runFlags
-                        });
-                        hasRun = false;
-                        runBuilder.Clear();
-                    }
-
+                    FlushTextRun(rowSnapshot, runBuilder, runStartCol, runForeground, runFlags, ref hasRun);
                     continue;
                 }
 
@@ -548,37 +570,13 @@ namespace Linalab.Terminal.Editor
 
                 if (cell.Codepoint == ' ')
                 {
-                    if (hasRun)
-                    {
-                        rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
-                        {
-                            StartCol = runStartCol,
-                            DisplayWidth = runBuilder.Length,
-                            Text = runBuilder.ToString(),
-                            Foreground = runForeground,
-                            Flags = runFlags
-                        });
-                        hasRun = false;
-                        runBuilder.Clear();
-                    }
+                    FlushTextRun(rowSnapshot, runBuilder, runStartCol, runForeground, runFlags, ref hasRun);
                     continue;
                 }
 
                 if (isWideLead)
                 {
-                    if (hasRun)
-                    {
-                        rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
-                        {
-                            StartCol = runStartCol,
-                            DisplayWidth = runBuilder.Length,
-                            Text = runBuilder.ToString(),
-                            Foreground = runForeground,
-                            Flags = runFlags
-                        });
-                        hasRun = false;
-                        runBuilder.Clear();
-                    }
+                    FlushTextRun(rowSnapshot, runBuilder, runStartCol, runForeground, runFlags, ref hasRun);
 
                     rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
                     {
@@ -601,36 +599,38 @@ namespace Linalab.Terminal.Editor
                 }
                 else if (runForeground != fgColor || runFlags != cell.Flags)
                 {
-                    rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
-                    {
-                        StartCol = runStartCol,
-                        DisplayWidth = runBuilder.Length,
-                        Text = runBuilder.ToString(),
-                        Foreground = runForeground,
-                        Flags = runFlags
-                    });
+                    FlushTextRun(rowSnapshot, runBuilder, runStartCol, runForeground, runFlags, ref hasRun);
                     runStartCol = col;
                     runForeground = fgColor;
                     runFlags = cell.Flags;
-                    runBuilder.Clear();
+                    hasRun = true;
                 }
 
                 runBuilder.Append(cell.Codepoint);
             }
 
-            if (hasRun)
-            {
-                rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
-                {
-                    StartCol = runStartCol,
-                    DisplayWidth = runBuilder.Length,
-                    Text = runBuilder.ToString(),
-                    Foreground = runForeground,
-                    Flags = runFlags
-                });
-            }
+            FlushTextRun(rowSnapshot, runBuilder, runStartCol, runForeground, runFlags, ref hasRun);
 
             return rowSnapshot;
+        }
+
+        static void FlushTextRun(TerminalRowSnapshot rowSnapshot, StringBuilder runBuilder, int runStartCol, Color runForeground, CellFlags runFlags, ref bool hasRun)
+        {
+            if (!hasRun)
+            {
+                return;
+            }
+
+            rowSnapshot.TextRuns.Add(new TerminalRunSnapshot
+            {
+                StartCol = runStartCol,
+                DisplayWidth = runBuilder.Length,
+                Text = runBuilder.ToString(),
+                Foreground = runForeground,
+                Flags = runFlags
+            });
+            hasRun = false;
+            runBuilder.Clear();
         }
 
         string GetSelectedRowText(int displayRow, int startCol, int endCol)
@@ -680,10 +680,10 @@ namespace Linalab.Terminal.Editor
             return mappedRow >= 0 && mappedRow < _buffer.Rows;
         }
 
-        CursorSnapshot BuildCursorSnapshot()
+        CursorSnapshot BuildCursorSnapshot(bool ignoreBlink = false)
         {
             var cursor = _buffer.Cursor;
-            if (!cursor.Visible || !_cursorVisible)
+            if (!cursor.Visible || (!ignoreBlink && !_cursorVisible))
             {
                 return new CursorSnapshot { Visible = false };
             }

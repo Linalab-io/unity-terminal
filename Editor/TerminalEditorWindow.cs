@@ -915,7 +915,8 @@ namespace Linalab.Terminal.Editor
             }
 
             var sanitizedNewValue = SanitizeCommittedText(evt.newValue);
-            var committedText = ExtractCommittedText(_lastTextInputSinkValue, sanitizedNewValue);
+            var sanitizedPreviousValue = SanitizeCommittedText(_lastTextInputSinkValue);
+            var committedText = ExtractCommittedText(sanitizedPreviousValue, sanitizedNewValue);
             committedText = SanitizeCommittedText(committedText);
             if (string.IsNullOrEmpty(committedText))
             {
@@ -1007,7 +1008,7 @@ namespace Linalab.Terminal.Editor
             _textInputSink.style.width = sinkWidth;
             _textInputSink.style.height = sinkHeight;
 
-            Vector2 screenAnchor = GUIUtility.GUIToScreenPoint(new Vector2(worldTopLeft.x, worldTopLeft.y + surfaceCursorRect.height));
+            Vector2 screenAnchor = GUIUtility.GUIToScreenPoint(new Vector2(worldTopLeft.x + surfaceCursorRect.width, worldTopLeft.y + surfaceCursorRect.height));
             if (!Mathf.Approximately(_lastCompositionCursorPosition.x, screenAnchor.x)
                 || !Mathf.Approximately(_lastCompositionCursorPosition.y, screenAnchor.y))
             {

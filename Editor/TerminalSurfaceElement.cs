@@ -308,28 +308,19 @@ namespace Linalab.Terminal.Editor
 
             UpdateGridSize();
             var snapshot = _renderer.BuildSnapshot(Input.compositionString);
-            
-            if (snapshot.CompositionPreview.Visible)
+
+            if (TryBuildCursorRect(snapshot, snapshot.CompositionPreview.Visible, snapshot.CompositionPreview.Row, snapshot.CompositionPreview.Col, snapshot.CompositionPreview.DisplayWidth, out cursorRect))
             {
-                cursorRect = new Rect(
-                    snapshot.CompositionPreview.Col * snapshot.CellWidth,
-                    snapshot.CompositionPreview.Row * snapshot.CellHeight,
-                    snapshot.CompositionPreview.DisplayWidth * snapshot.CellWidth,
-                    snapshot.CellHeight);
                 return true;
             }
 
-            if (!snapshot.Cursor.Visible)
+            if (_renderer.TryGetInputCursor(out var inputCursor)
+                && TryBuildCursorRect(snapshot, inputCursor.Visible, inputCursor.Row, inputCursor.Col, inputCursor.DisplayWidth, out cursorRect))
             {
-                return false;
+                return true;
             }
 
-            cursorRect = new Rect(
-                snapshot.Cursor.Col * snapshot.CellWidth,
-                snapshot.Cursor.Row * snapshot.CellHeight,
-                snapshot.Cursor.DisplayWidth * snapshot.CellWidth,
-                snapshot.CellHeight);
-            return true;
+            return false;
         }
 
         public void AdjustScroll(int delta)
@@ -422,7 +413,6 @@ namespace Linalab.Terminal.Editor
                     el.style.width = run.DisplayWidth * snapshot.CellWidth;
                     el.style.height = snapshot.CellHeight;
                     el.text = run.Text;
-                    el.style.color = run.Foreground;
                     
                     FontStyle fontStyle = FontStyle.Normal;
                     if ((run.Flags & CellFlags.Bold) != 0 && (run.Flags & CellFlags.Italic) != 0)
@@ -431,11 +421,8 @@ namespace Linalab.Terminal.Editor
                         fontStyle = FontStyle.Bold;
                     else if ((run.Flags & CellFlags.Italic) != 0)
                         fontStyle = FontStyle.Italic;
-                        
-                    el.style.unityFontStyleAndWeight = new StyleEnum<FontStyle>(fontStyle);
-                    el.style.fontSize = TerminalSettings.FontSize;
-                    el.style.unityFont = new StyleFont(_renderer.GetFont());
-                    el.style.unityFontDefinition = new StyleFontDefinition(StyleKeyword.None);
+
+                    ApplyLabelFontStyle(el, run.Foreground, fontStyle);
                 }
             }
 
@@ -459,11 +446,7 @@ namespace Linalab.Terminal.Editor
                 _compositionText.style.width = snapshot.CompositionPreview.DisplayWidth * snapshot.CellWidth;
                 _compositionText.style.height = snapshot.CellHeight;
                 _compositionText.text = snapshot.CompositionPreview.Text;
-                _compositionText.style.color = snapshot.DefaultBackground;
-                _compositionText.style.unityFontStyleAndWeight = new StyleEnum<FontStyle>(FontStyle.Normal);
-                _compositionText.style.fontSize = TerminalSettings.FontSize;
-                _compositionText.style.unityFont = new StyleFont(_renderer.GetFont());
-                _compositionText.style.unityFontDefinition = new StyleFontDefinition(StyleKeyword.None);
+                ApplyLabelFontStyle(_compositionText, snapshot.DefaultBackground, FontStyle.Normal);
             }
             else if (snapshot.Cursor.Visible)
             {
@@ -482,11 +465,7 @@ namespace Linalab.Terminal.Editor
                     _cursorText.style.width = snapshot.Cursor.DisplayWidth * snapshot.CellWidth;
                     _cursorText.style.height = snapshot.CellHeight;
                     _cursorText.text = snapshot.Cursor.Text;
-                    _cursorText.style.color = snapshot.DefaultBackground;
-                    _cursorText.style.unityFontStyleAndWeight = new StyleEnum<FontStyle>(FontStyle.Normal);
-                    _cursorText.style.fontSize = TerminalSettings.FontSize;
-                    _cursorText.style.unityFont = new StyleFont(_renderer.GetFont());
-                    _cursorText.style.unityFontDefinition = new StyleFontDefinition(StyleKeyword.None);
+                    ApplyLabelFontStyle(_cursorText, snapshot.DefaultBackground, FontStyle.Normal);
                 }
             }
 
@@ -545,6 +524,41 @@ namespace Linalab.Terminal.Editor
             }
             activeCount++;
             return el;
+        }
+
+        void ApplyLabelFontStyle(Label label, Color color, FontStyle fontStyle)
+        {
+            label.style.color = color;
+            label.style.unityFontStyleAndWeight = new StyleEnum<FontStyle>(fontStyle);
+            label.style.fontSize = TerminalSettings.FontSize;
+            var font = _renderer.GetFont();
+            if (font != null)
+            {
+                label.style.unityFont = new StyleFont(font);
+            }
+
+            label.style.unityFontDefinition = new StyleFontDefinition(StyleKeyword.None);
+        }
+
+        static bool TryBuildCursorRect(TerminalSnapshot snapshot, bool visible, int row, int col, int displayWidth, out Rect cursorRect)
+        {
+            cursorRect = default;
+            if (!visible || snapshot.VisibleRows <= 0 || snapshot.VisibleCols <= 0)
+            {
+                return false;
+            }
+
+            int clampedRow = Mathf.Clamp(row, 0, snapshot.VisibleRows - 1);
+            int clampedCol = Mathf.Clamp(col, 0, snapshot.VisibleCols - 1);
+            int remainingCols = Mathf.Max(1, snapshot.VisibleCols - clampedCol);
+            int clampedWidth = Mathf.Clamp(displayWidth <= 0 ? 1 : displayWidth, 1, remainingCols);
+
+            cursorRect = new Rect(
+                clampedCol * snapshot.CellWidth,
+                clampedRow * snapshot.CellHeight,
+                clampedWidth * snapshot.CellWidth,
+                snapshot.CellHeight);
+            return true;
         }
 
         bool TryHandleMousePassthrough(int button, Vector2 localMousePos, bool shift, bool alt, bool control, bool isRelease, bool isMotion)
