@@ -131,6 +131,15 @@ namespace Linalab.Terminal.Editor.Tests
         }
 
         [Test]
+        public void TerminalRenderer_GetFont_DoesNotRequireOnGUIContext()
+        {
+            var buffer = new TerminalBuffer(3, 40, 10);
+            var renderer = new TerminalRenderer(buffer);
+
+            Assert.DoesNotThrow(() => renderer.GetFont());
+        }
+
+        [Test]
         public void TerminalBuffer_Resize_PreservesVisibleContent_AndClampsCursor()
         {
             var buffer = new TerminalBuffer(3, 5, 10);

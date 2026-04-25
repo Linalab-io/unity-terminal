@@ -400,7 +400,7 @@ namespace Linalab.Terminal.Editor
             {
             }
 
-            return EditorStyles.label.font ?? GUI.skin?.font;
+            return Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         }
 
         static Font CreateMonospaceFont(string preferredFontFamily, int fontSize)
