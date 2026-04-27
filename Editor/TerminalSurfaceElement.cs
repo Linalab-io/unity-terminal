@@ -116,7 +116,8 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            if (TryHandleMousePassthrough(evt.button, evt.localMousePosition, evt.shiftKey, evt.altKey, evt.ctrlKey, isRelease: false, isMotion: false))
+            // Allow Shift+click to bypass mouse reporting for text selection (standard terminal behavior)
+            if (!evt.shiftKey && TryHandleMousePassthrough(evt.button, evt.localMousePosition, evt.shiftKey, evt.altKey, evt.ctrlKey, isRelease: false, isMotion: false))
             {
                 evt.StopPropagation();
                 return;
@@ -129,7 +130,7 @@ namespace Linalab.Terminal.Editor
 
             OnInteractionStarted?.Invoke();
             Focus();
-            
+
             if (TryGetCellPosition(evt.localMousePosition, out var cell))
             {
                 _isSelecting = true;
@@ -148,7 +149,8 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            if (TryHandleMousePassthrough(evt.button, evt.localMousePosition, evt.shiftKey, evt.altKey, evt.ctrlKey, isRelease: true, isMotion: false))
+            // Allow Shift+click to bypass mouse reporting for text selection (standard terminal behavior)
+            if (!evt.shiftKey && TryHandleMousePassthrough(evt.button, evt.localMousePosition, evt.shiftKey, evt.altKey, evt.ctrlKey, isRelease: true, isMotion: false))
             {
                 evt.StopPropagation();
                 return;
@@ -185,7 +187,8 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            if (_parser != null && _parser.IsMouseReportingEnabled)
+            // Allow Shift+drag to bypass mouse reporting for text selection (standard terminal behavior)
+            if (!evt.shiftKey && _parser != null && _parser.IsMouseReportingEnabled)
             {
                 if (_parser.MouseTrackingMode == TerminalMouseTrackingMode.AnyMotion)
                 {

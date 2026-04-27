@@ -73,6 +73,12 @@ namespace Linalab.Terminal.Editor.Tests
         }
 
         [Test]
+        public void ShellProcess_DetectShell_ReturnsShellName()
+        {
+            Assert.That(ShellProcess.DetectShell(), Is.Not.Empty);
+        }
+
+        [Test]
         public void ShellProcess_DetachLocalClient_IsSafeBeforeStart()
         {
             using var shell = new ShellProcess(ShellProcess.DetectShell());
@@ -331,6 +337,38 @@ namespace Linalab.Terminal.Editor.Tests
         }
 
         [Test]
+        public void TerminalRenderer_BuildSnapshot_CoalescesBackgrounds()
+        {
+            var buffer = new TerminalBuffer(2, 10, 0);
+            var renderer = new TerminalRenderer(buffer);
+            Assert.That(renderer.CalculateGridSize(new Rect(0f, 0f, 800f, 200f)), Is.True);
+
+            var parser = new AnsiParser(buffer);
+            parser.Feed("\x1b[41m"); // Red background
+            parser.Feed("ABC");
+            parser.Feed("\x1b[42m"); // Green background
+            parser.Feed("DE");
+            parser.Feed("\x1b[0m"); // Reset
+            parser.Feed("FG");
+            parser.Feed("\x1b[44m"); // Blue background
+            parser.Feed("한"); // Wide character
+
+            var snapshot = renderer.BuildSnapshot("");
+
+            var row0 = snapshot.Rows[0];
+            Assert.That(row0.Backgrounds.Count, Is.EqualTo(3));
+
+            Assert.That(row0.Backgrounds[0].StartCol, Is.EqualTo(0));
+            Assert.That(row0.Backgrounds[0].DisplayWidth, Is.EqualTo(3));
+
+            Assert.That(row0.Backgrounds[1].StartCol, Is.EqualTo(3));
+            Assert.That(row0.Backgrounds[1].DisplayWidth, Is.EqualTo(2));
+
+            Assert.That(row0.Backgrounds[2].StartCol, Is.EqualTo(7));
+            Assert.That(row0.Backgrounds[2].DisplayWidth, Is.EqualTo(2));
+        }
+
+        [Test]
         public void TerminalEditorWindow_SanitizeCommittedText_RemovesBomMarkers()
         {
             var sanitizeCommittedText = typeof(TerminalEditorWindow).GetMethod("SanitizeCommittedText", BindingFlags.Static | BindingFlags.NonPublic);
@@ -487,12 +525,32 @@ namespace Linalab.Terminal.Editor.Tests
                 Assert.That(TerminalSettings.TmuxAutoAttach, Is.False);
 
                 var toggledOn = TerminalSettings.ToggleTmuxAutoAttach();
-                Assert.That(toggledOn, Is.True);
-                Assert.That(TerminalSettings.TmuxAutoAttach, Is.True);
+                bool expectedEnabled = Application.platform != RuntimePlatform.WindowsEditor;
+                Assert.That(toggledOn, Is.EqualTo(expectedEnabled));
+                Assert.That(TerminalSettings.TmuxAutoAttach, Is.EqualTo(expectedEnabled));
 
                 var toggledOff = TerminalSettings.ToggleTmuxAutoAttach();
                 Assert.That(toggledOff, Is.False);
                 Assert.That(TerminalSettings.TmuxAutoAttach, Is.False);
+            }
+            finally
+            {
+                TerminalSettings.TmuxAutoAttach = original;
+            }
+        }
+
+        [Test]
+        public void TerminalSettings_PersistentSessionRequiresTmuxAutoAttachAndTmuxAvailability()
+        {
+            var original = TerminalSettings.TmuxAutoAttach;
+
+            try
+            {
+                TerminalSettings.TmuxAutoAttach = false;
+                Assert.That(TerminalSettings.PersistentSessionEnabled, Is.False);
+
+                TerminalSettings.TmuxAutoAttach = true;
+                Assert.That(TerminalSettings.PersistentSessionEnabled, Is.EqualTo(ShellProcess.IsTmuxAvailable()));
             }
             finally
             {
