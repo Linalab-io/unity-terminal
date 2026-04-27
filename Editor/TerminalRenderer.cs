@@ -447,17 +447,23 @@ namespace Linalab.Terminal.Editor
                 }
                 : new[]
                 {
+                    "SF Mono",
                     "Menlo",
                     "Monaco",
+                    "Courier New",
                     "Courier",
+                    "Andale Mono",
                     "MesloLGS NF",
                     "MesloLGSNerdFontMono",
                     "MesloLGS Nerd Font Mono",
                     "JetBrainsMono Nerd Font Mono",
+                    "JetBrainsMono NF",
                     "Hack Nerd Font Mono",
                     "HackNerdFontMono",
                     "FiraCodeNerdFontMono",
-                    "FiraCode Nerd Font Mono"
+                    "FiraCode Nerd Font Mono",
+                    "CaskaydiaCove Nerd Font Mono",
+                    "CaskaydiaCove NF"
                 };
         }
 
@@ -515,6 +521,11 @@ namespace Linalab.Terminal.Editor
             CellFlags runFlags = CellFlags.None;
             var hasRun = false;
 
+            var bgStartCol = 0;
+            var bgDisplayWidth = 0;
+            Color bgRunColor = Opaque(theme.DefaultBackground);
+            var hasBgRun = false;
+
             for (var col = 0; col < cols; col++)
             {
                 TerminalCell cell = isScrollback
@@ -560,12 +571,42 @@ namespace Linalab.Terminal.Editor
 
                 if (bgColor != Opaque(theme.DefaultBackground))
                 {
-                    rowSnapshot.Backgrounds.Add(new TerminalBackgroundSnapshot
+                    if (!hasBgRun)
                     {
-                        StartCol = col,
-                        DisplayWidth = isWideLead ? 2 : 1,
-                        Color = bgColor
-                    });
+                        hasBgRun = true;
+                        bgStartCol = col;
+                        bgDisplayWidth = isWideLead ? 2 : 1;
+                        bgRunColor = bgColor;
+                    }
+                    else if (bgRunColor == bgColor && bgStartCol + bgDisplayWidth == col)
+                    {
+                        bgDisplayWidth += isWideLead ? 2 : 1;
+                    }
+                    else
+                    {
+                        rowSnapshot.Backgrounds.Add(new TerminalBackgroundSnapshot
+                        {
+                            StartCol = bgStartCol,
+                            DisplayWidth = bgDisplayWidth,
+                            Color = bgRunColor
+                        });
+                        bgStartCol = col;
+                        bgDisplayWidth = isWideLead ? 2 : 1;
+                        bgRunColor = bgColor;
+                    }
+                }
+                else
+                {
+                    if (hasBgRun)
+                    {
+                        rowSnapshot.Backgrounds.Add(new TerminalBackgroundSnapshot
+                        {
+                            StartCol = bgStartCol,
+                            DisplayWidth = bgDisplayWidth,
+                            Color = bgRunColor
+                        });
+                        hasBgRun = false;
+                    }
                 }
 
                 if (cell.Codepoint == ' ')
@@ -610,6 +651,16 @@ namespace Linalab.Terminal.Editor
             }
 
             FlushTextRun(rowSnapshot, runBuilder, runStartCol, runForeground, runFlags, ref hasRun);
+
+            if (hasBgRun)
+            {
+                rowSnapshot.Backgrounds.Add(new TerminalBackgroundSnapshot
+                {
+                    StartCol = bgStartCol,
+                    DisplayWidth = bgDisplayWidth,
+                    Color = bgRunColor
+                });
+            }
 
             return rowSnapshot;
         }
