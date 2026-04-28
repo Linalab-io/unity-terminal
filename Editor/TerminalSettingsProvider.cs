@@ -43,20 +43,44 @@ namespace Linalab.Terminal.Editor
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Session", EditorStyles.boldLabel);
-            var tmuxAutoAttach = EditorGUILayout.Toggle("Tmux Auto Attach", TerminalSettings.TmuxAutoAttach);
-            if (tmuxAutoAttach != TerminalSettings.TmuxAutoAttach)
+            var backendEnabled = EditorGUILayout.Toggle("Backend Session", TerminalSettings.BackendSessionEnabled);
+            if (backendEnabled != TerminalSettings.BackendSessionEnabled)
             {
-                TerminalEditorWindow.HandleTmuxToggleChangeFromSettings(tmuxAutoAttach);
+                TerminalSettings.BackendSessionEnabled = backendEnabled;
+                TerminalEditorWindow.RestartOpenWindow();
                 GUIUtility.ExitGUI();
             }
 
-            if (TerminalSettings.TmuxAutoAttach)
+            EditorGUILayout.HelpBox(
+                TerminalSettings.BackendSessionEnabled
+                    ? "Backend mode keeps the terminal shell in a separate local server process so Unity domain reloads and window refreshes can reconnect without killing the session."
+                    : "Backend mode is disabled. Direct shell sessions are tied to the Unity Editor process unless tmux auto attach is enabled.",
+                MessageType.Info);
+
+            if (Application.platform == RuntimePlatform.WindowsEditor)
             {
-                var sessionName = TerminalSettings.GetTmuxSessionName();
-                var restartMessage = TerminalEditorWindow.HasOpenWindow()
-                    ? "Changes restart the open terminal window automatically."
-                    : "Open or restart the terminal window to apply changes.";
-                EditorGUILayout.HelpBox($"Session: {sessionName}\nRuntime behavior: if tmux session '{sessionName}' exists, Unity Terminal attaches to it; otherwise it creates a new tmux session with that name.\n{restartMessage}", MessageType.Info);
+                EditorGUILayout.HelpBox("Tmux auto attach is not available on Windows basic shell support.", MessageType.Info);
+            }
+            else
+            {
+                var tmuxAutoAttach = EditorGUILayout.Toggle("Tmux Auto Attach", TerminalSettings.TmuxAutoAttach);
+                if (tmuxAutoAttach != TerminalSettings.TmuxAutoAttach)
+                {
+                    TerminalEditorWindow.HandleTmuxToggleChangeFromSettings(tmuxAutoAttach);
+                    GUIUtility.ExitGUI();
+                }
+
+                if (TerminalSettings.TmuxAutoAttach)
+                {
+                    var sessionName = TerminalSettings.GetTmuxSessionName();
+                    var restartMessage = TerminalEditorWindow.HasOpenWindow()
+                        ? "Changes restart the open terminal window automatically."
+                        : "Open or restart the terminal window to apply changes.";
+                    var mode = TerminalSettings.PersistentSessionEnabled
+                        ? "Persistent: Unity detaches the local tmux client on Editor quit so the tmux session can keep running."
+                        : "Ephemeral fallback: tmux is not available, so the shell process is tied to the Unity Editor lifecycle.";
+                    EditorGUILayout.HelpBox($"Session: {sessionName}\nRuntime behavior: if tmux session '{sessionName}' exists, Unity Terminal attaches to it; otherwise it creates a new tmux session with that name.\n{mode}\n{restartMessage}", MessageType.Info);
+                }
             }
 
             EditorGUILayout.Space();

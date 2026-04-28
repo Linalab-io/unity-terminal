@@ -2,9 +2,7 @@
 
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-pink?logo=githubsponsors)](https://github.com/sponsors/islee23520)
 
-Standalone IMGUI-based terminal tool for the Unity Editor.
-
-This package embeds a terminal window directly inside the Unity Editor so you can run shell commands without leaving your project context. The package is distributed as `com.linalab.unity-terminal` and currently targets Unity `6000.0`.
+Standalone terminal tool for the Unity Editor that lets you run shell commands without leaving your project context. The package is distributed as `com.linalab.unity-terminal` and currently targets Unity `6000.0`.
 
 If this project helps your workflow, you can [support it on GitHub Sponsors](https://github.com/sponsors/islee23520).
 
@@ -12,10 +10,11 @@ If this project helps your workflow, you can [support it on GitHub Sponsors](htt
 
 - Open a terminal from the Unity Editor menu.
 - Run an interactive POSIX shell inside the editor.
-- Parse ANSI output and render it in an IMGUI terminal surface.
+- Parse ANSI output and render it in a UI Toolkit terminal surface.
 - Resize the in-editor terminal grid from the live Unity container size.
 - Configure shell, font, scrollback, and cursor blink settings from Unity Preferences.
-- Keep terminal state, rendering, parsing, and process management separated in a small editor-only assembly.
+- Keep shell work alive across Unity domain reloads by using the local backend session mode.
+- Keep POSIX shell work alive across Unity Editor restarts by enabling the optional persistent tmux session mode.
 
 ## Installation
 
@@ -34,8 +33,8 @@ Copy this package into your Unity project's `Packages/` directory.
 ## Requirements
 
 - Unity `6000.0`
-- A POSIX environment such as macOS or Linux
-- A shell available through `$SHELL`, `/bin/zsh`, or `/bin/bash`
+- macOS or Linux with a shell available through `$SHELL`, `/bin/zsh`, or `/bin/bash`
+- Windows with `pwsh.exe`, `powershell.exe`, or `cmd.exe` for basic pipe-backed shell support
 
 ## Usage
 
@@ -45,7 +44,9 @@ After importing the package, open the terminal from:
 Tools > Unity Editor Terminal
 ```
 
-The window is created by `Editor/TerminalEditorWindow.cs` and starts a shell using the configured working directory and shell profile.
+The terminal starts a shell using the configured working directory and shell profile.
+By default, the shell is owned by a small local backend server outside the Unity Editor process. Unity domain reloads, script refreshes, and terminal window recreation reconnect to that backend instead of killing the shell.
+On macOS and Linux, enable `tmux` in the toolbar or preferences when you also want a persistent session that survives full Unity Editor shutdowns.
 
 ## Configuration
 
@@ -59,6 +60,8 @@ Available settings include:
 
 - Shell profile
 - Custom shell path
+- Local backend session mode
+- tmux persistent session mode on macOS/Linux
 - Font family
 - Font size
 - Scrollback limit
@@ -84,22 +87,30 @@ Core files:
 - `Editor/ShellProcess.cs` — shell startup, process lifecycle, output draining
 - `Editor/AnsiParser.cs` — ANSI escape sequence parsing
 - `Editor/TerminalBuffer.cs` — terminal grid, cursor, and scrollback model
-- `Editor/TerminalSurfaceElement.cs` — UI Toolkit-hosted IMGUI drawing and selection rendering
+- `Editor/TerminalSurfaceElement.cs` — UI Toolkit terminal surface, selection handling, and composition/cursor overlays
 
 ## How It Works
 
-The runtime flow is:
+The default runtime flow is:
 
 ```text
-ShellProcess -> AnsiParser -> TerminalBuffer -> TerminalSurfaceElement
+BackendShellProcess -> local backend server -> shell/PTY -> AnsiParser -> TerminalBuffer -> TerminalRenderer -> TerminalSurfaceElement
+```
+
+The direct shell fallback flow is:
+
+```text
+ShellProcess -> AnsiParser -> TerminalBuffer -> TerminalRenderer -> TerminalSurfaceElement
 ```
 
 This keeps shell I/O, parsing, state, and drawing responsibilities separated inside the `Linalab.Terminal.Editor` assembly.
 
 ## Limitations
 
-- **Windows is not supported yet.** `ShellProcess.Start()` throws a `PlatformNotSupportedException` on Windows.
-- **This package is shell-oriented for POSIX environments.** It assumes a shell can be resolved from `$SHELL`, `/bin/zsh`, or `/bin/bash`.
+- **Domain reload persistence uses a local backend.** Backend mode survives Unity domain reloads and window recreation, but the backend is still local to your machine and project workspace.
+- **Full Editor restart persistence still requires tmux.** When tmux mode is enabled and tmux is available, Unity Terminal detaches its local client on Editor quit so the tmux session can keep running.
+- **Windows support is basic and pipe-backed.** `pwsh.exe`, `powershell.exe`, and `cmd.exe` can run simple shell commands through redirected stdin/stdout, but this is not ConPTY-backed yet.
+- **Windows terminal limitations:** full-screen TUIs, shell history/navigation keys, precise resize signaling, tmux auto-attach, and macOS clipboard-image paste are not supported on Windows basic shell mode.
 - **Headless EditMode coverage is backend-focused.** The automated smoke tests validate shell/process, ANSI parsing, buffer updates, and resize semantics, but not final on-screen rendering quality.
 
 ## Testing

@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using NUnit.Framework;
@@ -32,43 +33,7 @@ namespace Linalab.Terminal.Editor.Tests
                 shell.Write($"printf '\\033[31m{colorMarker}\\033[0m\\r\\n'");
                 shell.Write("\n");
 
-                var combined = new StringBuilder();
-                var deadline = DateTime.UtcNow.AddSeconds(8);
-                while (DateTime.UtcNow < deadline)
-                {
-                    shell.DrainOutput(data =>
-                    {
-                        if (string.IsNullOrEmpty(data))
-                        {
-                            return;
-                        }
-
-                        combined.Append(data);
-                        parser.Feed(data);
-                    });
-
-                    shell.DrainErrors(data =>
-                    {
-                        if (string.IsNullOrEmpty(data))
-                        {
-                            return;
-                        }
-
-                        combined.Append(data);
-                        parser.Feed(data);
-                    });
-
-                    var snapshot = combined.ToString();
-                    if (snapshot.Contains(plainMarker, StringComparison.Ordinal)
-                        && snapshot.Contains(colorMarker, StringComparison.Ordinal))
-                    {
-                        break;
-                    }
-
-                    Thread.Sleep(50);
-                }
-
-                var output = combined.ToString();
+                var output = WaitForShellOutput(shell, parser, TimeSpan.FromSeconds(8), plainMarker, colorMarker);
                 Assert.That(output, Does.Contain(plainMarker));
                 Assert.That(output, Does.Contain(colorMarker));
 
@@ -105,6 +70,12 @@ namespace Linalab.Terminal.Editor.Tests
         {
             var missing = "unity-terminal-smoke-missing-" + Guid.NewGuid().ToString("N");
             Assert.That(ShellProcess.TmuxSessionExists(missing), Is.False);
+        }
+
+        [Test]
+        public void ShellProcess_DetectShell_ReturnsShellName()
+        {
+            Assert.That(ShellProcess.DetectShell(), Is.Not.Empty);
         }
 
         [Test]
@@ -154,41 +125,8 @@ namespace Linalab.Terminal.Editor.Tests
                 secondShell.Write($"printf '{marker}\\r\\n'");
                 secondShell.Write("\n");
 
-                var combined = new StringBuilder();
-                var deadline = DateTime.UtcNow.AddSeconds(8);
-                while (DateTime.UtcNow < deadline)
-                {
-                    secondShell.DrainOutput(data =>
-                    {
-                        if (string.IsNullOrEmpty(data))
-                        {
-                            return;
-                        }
-
-                        combined.Append(data);
-                        secondParser.Feed(data);
-                    });
-
-                    secondShell.DrainErrors(data =>
-                    {
-                        if (string.IsNullOrEmpty(data))
-                        {
-                            return;
-                        }
-
-                        combined.Append(data);
-                        secondParser.Feed(data);
-                    });
-
-                    if (combined.ToString().Contains(marker, StringComparison.Ordinal))
-                    {
-                        break;
-                    }
-
-                    Thread.Sleep(50);
-                }
-
-                Assert.That(combined.ToString(), Does.Contain(marker));
+                var output = WaitForShellOutput(secondShell, secondParser, TimeSpan.FromSeconds(8), marker);
+                Assert.That(output, Does.Contain(marker));
             }
             finally
             {
@@ -196,6 +134,15 @@ namespace Linalab.Terminal.Editor.Tests
                 secondShell?.Dispose();
                 firstShell?.Dispose();
             }
+        }
+
+        [Test]
+        public void TerminalRenderer_GetFont_DoesNotRequireOnGUIContext()
+        {
+            var buffer = new TerminalBuffer(3, 40, 10);
+            var renderer = new TerminalRenderer(buffer);
+
+            Assert.DoesNotThrow(() => renderer.GetFont());
         }
 
         [Test]
@@ -374,6 +321,79 @@ namespace Linalab.Terminal.Editor.Tests
             Assert.That(TerminalInputHandler.TranslateKeyEvent(evt, "한"), Is.Null);
         }
 
+        [Test]
+        public void TerminalRenderer_BuildSnapshot_CompositionPreviewUsesWideGlyphDisplayWidth()
+        {
+            var buffer = new TerminalBuffer(2, 8, 0);
+            var renderer = new TerminalRenderer(buffer);
+
+            Assert.That(renderer.CalculateGridSize(new Rect(0f, 0f, 800f, 200f)), Is.True);
+
+            var snapshot = renderer.BuildSnapshot("한a");
+
+            Assert.That(snapshot.CompositionPreview.Visible, Is.True);
+            Assert.That(snapshot.CompositionPreview.DisplayWidth, Is.EqualTo(3));
+            Assert.That(snapshot.CompositionPreview.Col, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void TerminalRenderer_BuildSnapshot_CoalescesBackgrounds()
+        {
+            var buffer = new TerminalBuffer(2, 10, 0);
+            var renderer = new TerminalRenderer(buffer);
+            Assert.That(renderer.CalculateGridSize(new Rect(0f, 0f, 800f, 200f)), Is.True);
+
+            var parser = new AnsiParser(buffer);
+            parser.Feed("\x1b[41m"); // Red background
+            parser.Feed("ABC");
+            parser.Feed("\x1b[42m"); // Green background
+            parser.Feed("DE");
+            parser.Feed("\x1b[0m"); // Reset
+            parser.Feed("FG");
+            parser.Feed("\x1b[44m"); // Blue background
+            parser.Feed("한"); // Wide character
+
+            var snapshot = renderer.BuildSnapshot("");
+
+            var row0 = snapshot.Rows[0];
+            Assert.That(row0.Backgrounds.Count, Is.EqualTo(3));
+
+            Assert.That(row0.Backgrounds[0].StartCol, Is.EqualTo(0));
+            Assert.That(row0.Backgrounds[0].DisplayWidth, Is.EqualTo(3));
+
+            Assert.That(row0.Backgrounds[1].StartCol, Is.EqualTo(3));
+            Assert.That(row0.Backgrounds[1].DisplayWidth, Is.EqualTo(2));
+
+            Assert.That(row0.Backgrounds[2].StartCol, Is.EqualTo(7));
+            Assert.That(row0.Backgrounds[2].DisplayWidth, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void TerminalEditorWindow_SanitizeCommittedText_RemovesBomMarkers()
+        {
+            var sanitizeCommittedText = typeof(TerminalEditorWindow).GetMethod("SanitizeCommittedText", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(sanitizeCommittedText, Is.Not.Null);
+
+            var sanitized = (string)sanitizeCommittedText.Invoke(null, new object[] { "\uFEFF<feff>한글" });
+
+            Assert.That(sanitized, Is.EqualTo("한글"));
+        }
+
+        [Test]
+        public void TerminalEditorWindow_ExtractCommittedText_UsesSanitizedBaselineForImeCommit()
+        {
+            var sanitizeCommittedText = typeof(TerminalEditorWindow).GetMethod("SanitizeCommittedText", BindingFlags.Static | BindingFlags.NonPublic);
+            var extractCommittedText = typeof(TerminalEditorWindow).GetMethod("ExtractCommittedText", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(sanitizeCommittedText, Is.Not.Null);
+            Assert.That(extractCommittedText, Is.Not.Null);
+
+            var previous = (string)sanitizeCommittedText.Invoke(null, new object[] { "\uFEFF한" });
+            var current = (string)sanitizeCommittedText.Invoke(null, new object[] { "한글" });
+            var committed = (string)extractCommittedText.Invoke(null, new object[] { previous, current });
+
+            Assert.That(committed, Is.EqualTo("글"));
+        }
+
         [TestCase(RuntimePlatform.OSXEditor, KeyCode.V, true, false, true)]
         [TestCase(RuntimePlatform.OSXEditor, KeyCode.V, false, true, false)]
         [TestCase(RuntimePlatform.LinuxEditor, KeyCode.V, false, true, true)]
@@ -505,12 +525,32 @@ namespace Linalab.Terminal.Editor.Tests
                 Assert.That(TerminalSettings.TmuxAutoAttach, Is.False);
 
                 var toggledOn = TerminalSettings.ToggleTmuxAutoAttach();
-                Assert.That(toggledOn, Is.True);
-                Assert.That(TerminalSettings.TmuxAutoAttach, Is.True);
+                bool expectedEnabled = Application.platform != RuntimePlatform.WindowsEditor;
+                Assert.That(toggledOn, Is.EqualTo(expectedEnabled));
+                Assert.That(TerminalSettings.TmuxAutoAttach, Is.EqualTo(expectedEnabled));
 
                 var toggledOff = TerminalSettings.ToggleTmuxAutoAttach();
                 Assert.That(toggledOff, Is.False);
                 Assert.That(TerminalSettings.TmuxAutoAttach, Is.False);
+            }
+            finally
+            {
+                TerminalSettings.TmuxAutoAttach = original;
+            }
+        }
+
+        [Test]
+        public void TerminalSettings_PersistentSessionRequiresTmuxAutoAttachAndTmuxAvailability()
+        {
+            var original = TerminalSettings.TmuxAutoAttach;
+
+            try
+            {
+                TerminalSettings.TmuxAutoAttach = false;
+                Assert.That(TerminalSettings.PersistentSessionEnabled, Is.False);
+
+                TerminalSettings.TmuxAutoAttach = true;
+                Assert.That(TerminalSettings.PersistentSessionEnabled, Is.EqualTo(ShellProcess.IsTmuxAvailable()));
             }
             finally
             {
@@ -547,6 +587,54 @@ namespace Linalab.Terminal.Editor.Tests
             {
                 buffer.PutChar(ch);
             }
+        }
+
+        static string WaitForShellOutput(ShellProcess shell, AnsiParser parser, TimeSpan timeout, params string[] markers)
+        {
+            var combined = new StringBuilder();
+            var deadline = DateTime.UtcNow.Add(timeout);
+            while (DateTime.UtcNow < deadline)
+            {
+                DrainShellStream(shell.DrainOutput, parser, combined);
+                DrainShellStream(shell.DrainErrors, parser, combined);
+
+                var snapshot = combined.ToString();
+                if (ContainsAllMarkers(snapshot, markers))
+                {
+                    break;
+                }
+
+                Thread.Sleep(50);
+            }
+
+            return combined.ToString();
+        }
+
+        static void DrainShellStream(Action<Action<string>> drain, AnsiParser parser, StringBuilder combined)
+        {
+            drain(data =>
+            {
+                if (string.IsNullOrEmpty(data))
+                {
+                    return;
+                }
+
+                combined.Append(data);
+                parser.Feed(data);
+            });
+        }
+
+        static bool ContainsAllMarkers(string snapshot, string[] markers)
+        {
+            foreach (var marker in markers)
+            {
+                if (!snapshot.Contains(marker, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         static string ReadLine(TerminalBuffer buffer, int row, int cols)

@@ -21,11 +21,16 @@ namespace Linalab.Terminal.Editor
     {
         bool IsRunning { get; }
         int ProcessId { get; }
+        bool UsedTmuxAttachStartupPath { get; }
         void Start(string workingDirectory = null, int cols = 80, int rows = 24);
         void Write(string input);
         void WriteByte(byte value);
         void Kill();
         void Resize(int cols, int rows);
+        bool TryResize(int cols, int rows);
+        void DrainOutput(Action<string> handler);
+        void DrainErrors(Action<string> handler);
+        void DetachLocalClient();
     }
 
     public sealed class ShellProcess : IShellProcess
@@ -118,11 +123,6 @@ namespace Linalab.Terminal.Editor
         {
             ThrowIfDisposed();
 
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                throw new PlatformNotSupportedException("com.linalab.unity-terminal currently supports POSIX Unity Editor shells only.");
-            }
-
             lock (_syncRoot)
             {
                 if (IsProcessRunning(_process))
@@ -172,7 +172,7 @@ namespace Linalab.Terminal.Editor
                         return;
                     }
 
-                    _process.StandardInput.Write(input);
+                    _process.StandardInput.Write(NormalizeInputForShell(input));
                     _process.StandardInput.Flush();
                 }
             }
@@ -323,6 +323,11 @@ namespace Linalab.Terminal.Editor
         public bool TryResize(int cols, int rows)
         {
             if (_disposed || cols <= 0 || rows <= 0)
+            {
+                return false;
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 return false;
             }
@@ -508,13 +513,17 @@ namespace Linalab.Terminal.Editor
                 startInfo.WorkingDirectory = workingDirectory;
             }
 
-            startInfo.Environment["TERM"] = "xterm-256color";
-            startInfo.Environment["LANG"] = "en_US.UTF-8";
-            startInfo.Environment["LC_ALL"] = "en_US.UTF-8";
             startInfo.Environment["PYTHONUNBUFFERED"] = "1";
-            startInfo.Environment["COLUMNS"] = Math.Max(1, cols).ToString(CultureInfo.InvariantCulture);
-            startInfo.Environment["LINES"] = Math.Max(1, rows).ToString(CultureInfo.InvariantCulture);
-            startInfo.Environment.Remove("TMUX");
+
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                startInfo.Environment["TERM"] = "xterm-256color";
+                startInfo.Environment["LANG"] = "en_US.UTF-8";
+                startInfo.Environment["LC_ALL"] = "en_US.UTF-8";
+                startInfo.Environment["COLUMNS"] = Math.Max(1, cols).ToString(CultureInfo.InvariantCulture);
+                startInfo.Environment["LINES"] = Math.Max(1, rows).ToString(CultureInfo.InvariantCulture);
+                startInfo.Environment.Remove("TMUX");
+            }
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists("/usr/bin/script"))
             {
@@ -936,8 +945,7 @@ namespace Linalab.Terminal.Editor
 
         public static TmuxSessionInfo[] ListTmuxSessionInfos()
         {
-            var tmuxPath = ResolveCommandPath("tmux");
-            if (string.IsNullOrEmpty(tmuxPath))
+            if (!TryResolveTmuxPath(out var tmuxPath))
             {
                 return Array.Empty<TmuxSessionInfo>();
             }
@@ -1004,6 +1012,23 @@ namespace Linalab.Terminal.Editor
             {
                 return Array.Empty<TmuxSessionInfo>();
             }
+        }
+
+        public static bool IsTmuxAvailable()
+        {
+            return TryResolveTmuxPath(out _);
+        }
+
+        static bool TryResolveTmuxPath(out string tmuxPath)
+        {
+            tmuxPath = null;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return false;
+            }
+
+            tmuxPath = ResolveCommandPath("tmux");
+            return !string.IsNullOrEmpty(tmuxPath);
         }
 
         public static string[] ListTmuxWorkspaceSessions(string workspacePath)
@@ -1213,6 +1238,17 @@ namespace Linalab.Terminal.Editor
             catch (InvalidOperationException)
             {
             }
+        }
+
+        static string NormalizeInputForShell(string input)
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                && string.Equals(input, "\r", StringComparison.Ordinal))
+            {
+                return Environment.NewLine;
+            }
+
+            return input;
         }
 
         void ThrowIfDisposed()
