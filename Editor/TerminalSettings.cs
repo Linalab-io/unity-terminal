@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEngine;
 
@@ -23,6 +24,7 @@ namespace Linalab.Terminal.Editor
         const string ShellPathOverrideKey = Prefix + "ShellPathOverride";
         const string CursorBlinkRateKey = Prefix + "CursorBlinkRate";
         const string VerboseLoggingKey = Prefix + "VerboseLogging";
+        const string BackendSessionEnabledKey = Prefix + "BackendSessionEnabled";
         const string TmuxAutoAttachKey = Prefix + "TmuxAutoAttach";
         const string TmuxSessionNameOverrideKey = Prefix + "TmuxSessionNameOverride";
 
@@ -97,16 +99,27 @@ namespace Linalab.Terminal.Editor
             return VerboseLogging;
         }
 
+        public static bool BackendSessionEnabled
+        {
+            get => EditorPrefs.GetBool(BackendSessionEnabledKey, true);
+            set => EditorPrefs.SetBool(BackendSessionEnabledKey, value);
+        }
+
         public static bool TmuxAutoAttach
         {
-            get => EditorPrefs.GetBool(TmuxAutoAttachKey, false);
-            set => EditorPrefs.SetBool(TmuxAutoAttachKey, value);
+            get => !RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && EditorPrefs.GetBool(TmuxAutoAttachKey, false);
+            set => EditorPrefs.SetBool(TmuxAutoAttachKey, !RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && value);
         }
 
         public static bool ToggleTmuxAutoAttach()
         {
             TmuxAutoAttach = !TmuxAutoAttach;
             return TmuxAutoAttach;
+        }
+
+        public static bool PersistentSessionEnabled
+        {
+            get => TmuxAutoAttach && ShellProcess.IsTmuxAvailable();
         }
 
         public static string TmuxSessionNameOverride
@@ -170,6 +183,13 @@ namespace Linalab.Terminal.Editor
 
         public static string ResolveShellPath()
         {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return ShellProfile == TerminalShellProfile.Custom && !string.IsNullOrWhiteSpace(ShellPathOverride)
+                    ? ShellPathOverride
+                    : ShellProcess.DetectShell();
+            }
+
             return ShellProfile switch
             {
                 TerminalShellProfile.Zsh => "/bin/zsh",

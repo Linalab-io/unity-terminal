@@ -18,7 +18,7 @@ namespace Linalab.Terminal.Editor
 
         TerminalBuffer _buffer;
         AnsiParser _parser;
-        ShellProcess _shellProcess;
+        IShellProcess _shellProcess;
         TerminalSurfaceElement _terminalSurface;
         TextField _textInputSink;
         IMGUIContainer _toolbarContainer;
@@ -50,7 +50,7 @@ namespace Linalab.Terminal.Editor
         {
             public TerminalBuffer Buffer;
             public AnsiParser Parser;
-            public ShellProcess ShellProcess;
+            public IShellProcess ShellProcess;
             public bool HasStartedShell;
             public bool IsTmuxClient;
             public bool? HasReconnectableTmuxSession;
@@ -478,7 +478,7 @@ namespace Linalab.Terminal.Editor
             {
                 var buffer = new TerminalBuffer(DefaultRows, DefaultCols, TerminalSettings.ScrollbackLimit);
                 var parser = new AnsiParser(buffer);
-                var shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
+                var shellProcess = CreateShellProcess();
                 parser.ResponseCallback = response => shellProcess.Write(response);
                 s_sharedSession = new TerminalRuntimeSession
                 {
@@ -502,8 +502,21 @@ namespace Linalab.Terminal.Editor
                 return;
             }
 
-            s_sharedSession.ShellProcess?.Dispose();
+            if (ShouldDetachSharedSessionOnEditorQuit(s_sharedSession))
+            {
+                s_sharedSession.ShellProcess?.DetachLocalClient();
+            }
+            else
+            {
+                s_sharedSession.ShellProcess?.Dispose();
+            }
+
             s_sharedSession = null;
+        }
+
+        static bool ShouldDetachSharedSessionOnEditorQuit(TerminalRuntimeSession session)
+        {
+            return session != null && session.IsTmuxClient;
         }
 
         void EnsureEditorUpdateSubscription()
@@ -673,15 +686,18 @@ namespace Linalab.Terminal.Editor
                 ClearTerminal();
             }
 
-            var tmuxAutoAttach = GUILayout.Toggle(
-                TerminalSettings.TmuxAutoAttach,
-                new GUIContent("tmux", "Auto-attach to the persistent tmux session for this Unity workspace."),
-                EditorStyles.toolbarButton,
-                GUILayout.Width(52f));
-            if (tmuxAutoAttach != TerminalSettings.TmuxAutoAttach)
+            if (Application.platform != RuntimePlatform.WindowsEditor)
             {
-                HandleTmuxToggleChange(tmuxAutoAttach);
-                GUIUtility.ExitGUI();
+                var tmuxAutoAttach = GUILayout.Toggle(
+                    TerminalSettings.TmuxAutoAttach,
+                    new GUIContent("tmux", "Auto-attach to the persistent tmux session for this Unity workspace."),
+                    EditorStyles.toolbarButton,
+                    GUILayout.Width(52f));
+                if (tmuxAutoAttach != TerminalSettings.TmuxAutoAttach)
+                {
+                    HandleTmuxToggleChange(tmuxAutoAttach);
+                    GUIUtility.ExitGUI();
+                }
             }
 
             if (GUILayout.Button("A-", EditorStyles.toolbarButton, GUILayout.Width(32f)))
@@ -698,7 +714,16 @@ namespace Linalab.Terminal.Editor
             if (TerminalSettings.TmuxAutoAttach)
             {
                 var displayedTmuxSessionName = s_sharedSession?.TmuxSessionName ?? TerminalSettings.GetTmuxSessionName();
-                GUILayout.Label($"tmux:{displayedTmuxSessionName}", EditorStyles.miniLabel);
+                var sessionMode = TerminalSettings.PersistentSessionEnabled ? "persistent" : "ephemeral";
+                GUILayout.Label($"tmux:{displayedTmuxSessionName} ({sessionMode})", EditorStyles.miniLabel);
+                GUILayout.Space(8f);
+            }
+            else
+            {
+                var sessionLabel = TerminalSettings.BackendSessionEnabled
+                    ? "backend session"
+                    : Application.platform == RuntimePlatform.WindowsEditor ? "basic pipe session" : "ephemeral shell";
+                GUILayout.Label(sessionLabel, EditorStyles.miniLabel);
                 GUILayout.Space(8f);
             }
 
@@ -915,7 +940,8 @@ namespace Linalab.Terminal.Editor
             }
 
             var sanitizedNewValue = SanitizeCommittedText(evt.newValue);
-            var committedText = ExtractCommittedText(_lastTextInputSinkValue, sanitizedNewValue);
+            var sanitizedPreviousValue = SanitizeCommittedText(_lastTextInputSinkValue);
+            var committedText = ExtractCommittedText(sanitizedPreviousValue, sanitizedNewValue);
             committedText = SanitizeCommittedText(committedText);
             if (string.IsNullOrEmpty(committedText))
             {
@@ -1007,7 +1033,7 @@ namespace Linalab.Terminal.Editor
             _textInputSink.style.width = sinkWidth;
             _textInputSink.style.height = sinkHeight;
 
-            Vector2 screenAnchor = GUIUtility.GUIToScreenPoint(new Vector2(worldTopLeft.x, worldTopLeft.y + surfaceCursorRect.height));
+            Vector2 screenAnchor = GUIUtility.GUIToScreenPoint(new Vector2(worldTopLeft.x + surfaceCursorRect.width, worldTopLeft.y + surfaceCursorRect.height));
             if (!Mathf.Approximately(_lastCompositionCursorPosition.x, screenAnchor.x)
                 || !Mathf.Approximately(_lastCompositionCursorPosition.y, screenAnchor.y))
             {
@@ -1259,7 +1285,7 @@ namespace Linalab.Terminal.Editor
             }
 
             _terminalSurface?.ClearSelection();
-            _shellProcess = new ShellProcess(TerminalSettings.ResolveShellPath());
+            _shellProcess = CreateShellProcess();
             _parser = new AnsiParser(_buffer);
             _parser.ResponseCallback = response => _shellProcess?.Write(response);
             _terminalSurface?.SetMouseProtocolSource(_parser);
@@ -1390,6 +1416,13 @@ namespace Linalab.Terminal.Editor
             _wasShellRunning = _shellProcess.IsRunning;
         }
 
+        static IShellProcess CreateShellProcess()
+        {
+            return TerminalSettings.BackendSessionEnabled && !TerminalSettings.TmuxAutoAttach
+                ? new BackendShellProcess(TerminalSettings.ResolveShellPath())
+                : new ShellProcess(TerminalSettings.ResolveShellPath());
+        }
+
         static bool HasUsableShellSize(int cols, int rows)
         {
             return cols >= MinimumUsableCols && rows >= MinimumUsableRows;
@@ -1485,6 +1518,11 @@ namespace Linalab.Terminal.Editor
         internal static bool HasOpenWindow()
         {
             return FindOpenWindow() != null;
+        }
+
+        internal static void RestartOpenWindow()
+        {
+            FindOpenWindow()?.RestartShell();
         }
 
         static bool TryApplyTmuxAutoAttachSelection()
